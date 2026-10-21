@@ -1,0 +1,228 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Vibra — pruebas de dsp.js</title>
+<style>
+body{font:14px/1.45 system-ui,sans-serif;margin:16px;background:#fff;color:#111}
+table{border-collapse:collapse;width:100%}
+td,th{border:1px solid #ccc;padding:4px 6px;vertical-align:top;text-align:left}
+td.p{color:#0a6b2e;font-weight:700} td.f{color:#b00020;font-weight:700}
+code{font-size:12px}
+</style>
+</head>
+<body>
+<h1>Pruebas de dsp.js</h1>
+<p>Cada prueba genera señales sintéticas con respuesta conocida (semillas fijas, resultados reproducibles).</p>
+<p id="resumen">Ejecutando…</p>
+<table><thead><tr><th>#</th><th>Prueba</th><th>Resultado</th><th>Detalle numérico</th></tr></thead><tbody id="informe"></tbody></table>
+<script src="dsp.js"></script>
+<script>
+'use strict';
+const D = DSP, filas = [];
+let npasa = 0, nfalla = 0;
+function prueba(nombre, fn) {
+  let r; const t0 = performance.now();
+  try { r = fn(); } catch (e) { r = { pasa: false, detalle: 'EXCEPCIÓN: ' + e.message + ' ' + (e.stack || '').split('\n')[1] }; }
+  r.pasa ? npasa++ : nfalla++;
+  filas.push(`<tr><td>${filas.length + 1}</td><td>${nombre}</td><td class="${r.pasa ? 'p' : 'f'}">${r.pasa ? 'PASA' : 'FALLA'}</td><td>${r.detalle} <small>(${(performance.now() - t0).toFixed(0)} ms)</small></td></tr>`);
+}
+const fx = (v, d = 4) => Number(v).toFixed(d), fe = (v, d = 2) => Number(v).toExponential(d);
+const seno = (N, fs, f, A, ph, sig, rand) => { const x = new Float64Array(N); for (let i = 0; i < N; i++) x[i] = A * Math.cos(2 * Math.PI * f * i / fs + ph) + (sig ? sig * D.normal(rand) : 0); return x; };
+
+prueba('FFT radix-2 contra DFT directa (N = 64) e ida y vuelta (N = 4096)', () => {
+  const r = D.rng(1), N = 64, x = Array.from({ length: N }, () => r() - 0.5), re = Float64Array.from(x), im = new Float64Array(N);
+  D.fft(re, im); let e = 0;
+  for (let k = 0; k < N; k++) { let a = 0, b = 0; for (let n = 0; n < N; n++) { a += x[n] * Math.cos(2 * Math.PI * k * n / N); b -= x[n] * Math.sin(2 * Math.PI * k * n / N); } e = Math.max(e, Math.hypot(a - re[k], b - im[k])); }
+  const M = 4096, y = Float64Array.from({ length: M }, () => r()), yr = Float64Array.from(y), yi = new Float64Array(M);
+  D.fft(yr, yi); D.fft(yr, yi, true); let e2 = 0; for (let i = 0; i < M; i++) e2 = Math.max(e2, Math.abs(yr[i] - y[i]));
+  return { pasa: e < 1e-12 && e2 < 1e-12, detalle: `máx |FFT − DFT| = ${fe(e)}; máx error ida y vuelta = ${fe(e2)}` };
+});
+
+prueba('Frecuencia de un seno con ruido: interpolación de sub-bin (Welch Hann, Gaussiana) con error < 0,1·Δf', () => {
+  const r = D.rng(2), fs = 100, N = 8192; let peor = 0, peorP = 0, txt = [];
+  for (let k = 0; k < 40; k++) {
+    const f = 3 + 40 * r(), x = seno(N, fs, f, 1, 6 * r(), 0.3, r), esp = D.welch(x, fs, { nseg: 1024, ventana: 'hann' });
+    const pg = D.buscarPicos(esp.f, esp.amp, { n: 1, interp: 'gauss' })[0], pp = D.buscarPicos(esp.f, esp.amp, { n: 1, interp: 'parabola' })[0];
+    peor = Math.max(peor, Math.abs(pg.f - f) / esp.df); peorP = Math.max(peorP, Math.abs(pp.f - f) / esp.df);
+  }
+  return { pasa: peor < 0.1, detalle: `40 senos (f aleatoria 3–43 Hz, SNR por muestra 7,5 dB), Δf = ${fx(fs / 1024, 4)} Hz: máx error Gaussiana = ${fx(peor, 4)}·Δf; (parábola lineal: ${fx(peorP, 4)}·Δf, solo informativo)` };
+});
+
+prueba('Afinado DTFT del tono: incertidumbre σ_f calibrada (Monte Carlo, 200 realizaciones)', () => {
+  const r = D.rng(3), fs = 100, N = 4096, f = 12.3456; const z = [], sig = [];
+  for (let k = 0; k < 200; k++) {
+    const x = seno(N, fs, f, 0.2, 6 * r(), 0.5, r), esp = D.welch(x, fs, { nseg: 512 });
+    const p = D.buscarPicos(esp.f, esp.amp, { n: 1 })[0], piso = D.pisoLocal(esp.psd, p.i, 30, 4);
+    const a = D.afinarTono(x, fs, p.f, { ancho: esp.df, ruidoPSD: piso }); z.push((a.f - f) / a.sf); sig.push(a.sf);
+  }
+  const sdz = D.desv(z), mz = D.media(z);
+  return { pasa: sdz > 0.8 && sdz < 1.25 && Math.abs(mz) < 0.25, detalle: `σ_f medio reportado = ${fe(D.media(sig))} Hz; desviación estándar de (f̂ − f)/σ_f = ${fx(sdz, 3)} (ideal 1; se acepta 0,8–1,25); media = ${fx(mz, 3)}` };
+});
+
+prueba('PSD de ruido blanco: nivel = 2σ²/fs (±10 %) y teorema de Parseval (Σ PSD·Δf = varianza, ±2 %)', () => {
+  const r = D.rng(4), fs = 200, N = 1 << 16, s = 0.1, x = new Float64Array(N); for (let i = 0; i < N; i++) x[i] = s * D.normal(r);
+  const out = [];
+  let ok = true;
+  for (const v of ['hann', 'hamming', 'blackmanharris', 'flattop', 'rect']) {
+    const e = D.welch(x, fs, { nseg: 1024, ventana: v }); let m = 0, tot = 0;
+    for (let i = 1; i < e.psd.length - 1; i++) m += e.psd[i]; m /= e.psd.length - 2;
+    for (let i = 0; i < e.psd.length; i++) tot += e.psd[i] * e.df;
+    const teo = 2 * s * s / fs, errN = m / teo - 1, errP = tot / D.desv(x) ** 2 - 1;
+    ok = ok && Math.abs(errN) < 0.1 && Math.abs(errP) < 0.02;
+    out.push(`${v}: nivel ${fx(100 * errN, 2)} %, Parseval ${fx(100 * errP, 2)} %`);
+  }
+  return { pasa: ok, detalle: `teórico ${fe(2 * s * s / fs, 3)} (m/s²)²/Hz. ` + out.join('; ') };
+});
+
+prueba('Amplitud de un seno con cada ventana (desfase 0, ¼ y ½ bin): flat-top cruda ±1 %; resto corregidas por festoneo ±1 %', () => {
+  const fs = 256, nseg = 1024, N = 1 << 15, A = 2.5, out = []; let ok = true;
+  for (const v of ['rect', 'hann', 'hamming', 'blackmanharris', 'flattop']) {
+    let peorC = 0, peorR = 0;
+    for (const d of [0, 0.25, 0.5]) {
+      const f = (100 + d) * fs / nseg, x = seno(N, fs, f, A, 0.3, 0, null), e = D.welch(x, fs, { nseg, ventana: v });
+      const p = D.buscarPicos(e.f, e.amp, { n: 1, interp: 'gauss', promDb: 3 })[0];
+      const cruda = e.amp[p.i], corr = cruda / D.respVentana(e.w, p.delta);
+      peorR = Math.max(peorR, Math.abs(cruda / A - 1)); peorC = Math.max(peorC, Math.abs(corr / A - 1));
+    }
+    if (v === 'flattop') ok = ok && peorR < 0.01; else if (v !== 'rect') ok = ok && peorC < 0.01;
+    out.push(`${v}: cruda ${fx(100 * peorR, 3)} %, corregida ${fx(100 * peorC, 3)} %`);
+  }
+  return { pasa: ok, detalle: 'máximo error relativo: ' + out.join('; ') + ' (rectangular solo informativa: fuga espectral)' };
+});
+
+prueba('Ajuste LM de oscilador amortiguado: f y τ dentro de 2σ en ≥ 90 % de 50 realizaciones; incertidumbres calibradas', () => {
+  const r = D.rng(5), fs = 100, N = 1200, f = 2.3, tau = 3, A = 1, c = 0.05, s = 0.05; let inF = 0, inT = 0; const zf = [], zt = [], zz = [];
+  for (let k = 0; k < 50; k++) {
+    const ph = 6.283 * r(), t = new Float64Array(N), y = new Float64Array(N);
+    for (let i = 0; i < N; i++) { t[i] = i / fs; y[i] = A * Math.exp(-t[i] / tau) * Math.cos(2 * Math.PI * f * t[i] + ph) + c + s * D.normal(r); }
+    const a = D.ajustarAmortiguado(t, y);
+    const z1 = (a.f - f) / a.sf, z2 = (a.tau - tau) / a.stau; zf.push(z1); zt.push(z2);
+    const zeta = 1 / (tau * Math.hypot(2 * Math.PI * f, 1 / tau)); zz.push((a.zeta - zeta) / a.szeta);
+    if (Math.abs(z1) < 2) inF++; if (Math.abs(z2) < 2) inT++;
+  }
+  const sf = D.desv(zf), st = D.desv(zt);
+  return { pasa: inF >= 45 && inT >= 45 && sf > 0.7 && sf < 1.35 && st > 0.7 && st < 1.35,
+    detalle: `dentro de 2σ: f ${inF}/50, τ ${inT}/50. Desv. estándar de los residuos normalizados (ideal 1): f ${fx(sf, 3)}, τ ${fx(st, 3)}, ζ ${fx(D.desv(zz), 3)}. Verdad: f = ${f} Hz, τ = ${tau} s, σ_ruido = ${s}` };
+});
+
+prueba('Decremento logarítmico y media potencia coinciden con la ζ verdadera (señal sin ruido)', () => {
+  const fs = 200, N = 4000, f = 3.1, tau = 2.5, t = new Float64Array(N), y = new Float64Array(N);
+  for (let i = 0; i < N; i++) { t[i] = i / fs; y[i] = Math.exp(-t[i] / tau) * Math.cos(2 * Math.PI * f * t[i]); }
+  const w0 = Math.hypot(2 * Math.PI * f, 1 / tau), zeta = 1 / (tau * w0), dl = D.decrementoLog(t, y, 0, f), mp = D.amortiguamientoMedioPotencia(y, fs, 0);
+  const e1 = dl.zeta / zeta - 1, e2 = mp.zeta / zeta - 1;
+  return { pasa: Math.abs(e1) < 0.01 && Math.abs(e2) < 0.05, detalle: `ζ verdadera ${fx(zeta, 5)}; decremento log ${fx(dl.zeta, 5)} (${fx(100 * e1, 2)} %); media potencia ${fx(mp.zeta, 5)} (${fx(100 * e2, 2)} %, tolerancia 5 %)` };
+});
+
+prueba('Desviación de Allan: ruido blanco pendiente −½ ± 0,05 y paseo aleatorio +½ ± 0,05; N = PSD/√2', () => {
+  const r = D.rng(6), fs = 100, N = 1 << 18, s = 0.02, w = new Float64Array(N), rw = new Float64Array(N);
+  let acc = 0; for (let i = 0; i < N; i++) { w[i] = s * D.normal(r); acc += 1e-4 * D.normal(r); rw[i] = acc; }
+  const a1 = D.allan(w, fs), p1 = D.pendienteLogLog(a1.tau, a1.adev, 0.01, 100);
+  const a2 = D.allan(rw, fs), p2 = D.pendienteLogLog(a2.tau, a2.adev, 1, 100);
+  const co = D.coefAllan(a1), esp = D.welch(w, fs, { nseg: 2048 }), dens = Math.sqrt(D.mediana(esp.psd.slice(5))), rel = co.N / (dens / Math.SQRT2) - 1;
+  return { pasa: Math.abs(p1.pendiente + 0.5) < 0.05 && Math.abs(p2.pendiente - 0.5) < 0.05 && Math.abs(rel) < 0.05,
+    detalle: `blanco: pendiente ${fx(p1.pendiente, 4)} (τ 0,01–100 s); paseo aleatorio: ${fx(p2.pendiente, 4)} (τ 1–100 s); N (σ en τ = 1 s) = ${fe(co.N, 3)} vs densidad/√2 = ${fe(dens / Math.SQRT2, 3)} (${fx(100 * rel, 2)} %); verdad σ/√fs = ${fe(s / Math.sqrt(fs), 3)}` };
+});
+
+prueba('Integral elíptica K por AGM y periodo de péndulo de gran amplitud', () => {
+  const K45 = D.elipticaK(Math.SQRT1_2), ref = 1.8540746773013719, Tr = D.periodoPendulo(1, 9.81, Math.PI / 2) / (2 * Math.PI * Math.sqrt(1 / 9.81));
+  return { pasa: Math.abs(K45 - ref) < 1e-13 && Math.abs(Tr - 1.18034060) < 1e-7, detalle: `K(1/√2) = ${K45.toFixed(15)} (ref. ${ref}); T(90°)/T₀ = ${Tr.toFixed(8)} (ref. 1,18034060)` };
+});
+
+prueba('Péndulo de gran amplitud (θ₀ = 60°, L = 1 m, g = 9,78) medido con giroscopio con ruido, sesgo y jitter: g dentro de 0,3 %', () => {
+  const r = D.rng(7), g = 9.78, L = 1, beta = 0.005, dt = 2e-4, Tt = 40; let th = Math.PI / 3, om = 0;
+  const nf = Math.round(Tt / dt), W = new Float64Array(nf + 1); W[0] = om;
+  const fder = (a, b) => [b, -(g / L) * Math.sin(a) - 2 * beta * b];
+  for (let i = 0; i < nf; i++) {
+    const k1 = fder(th, om), k2 = fder(th + dt / 2 * k1[0], om + dt / 2 * k1[1]), k3 = fder(th + dt / 2 * k2[0], om + dt / 2 * k2[1]), k4 = fder(th + dt * k3[0], om + dt * k3[1]);
+    th += dt / 6 * (k1[0] + 2 * k2[0] + 2 * k3[0] + k4[0]); om += dt / 6 * (k1[1] + 2 * k2[1] + 2 * k3[1] + k4[1]); W[i + 1] = om;
+  }
+  const fs = 100, ts = [], ws = [];
+  for (let k = 0; k * (1 / fs) < Tt - 0.1; k++) { const tk = k / fs + 0.0015 * D.normal(r) + 0.01; if (r() < 0.003) continue; const j = Math.floor(tk / dt), u = tk / dt - j; ts.push(tk); ws.push(W[j] * (1 - u) + W[j + 1] * u + 0.01 * D.normal(r) + 0.02); }
+  const fsr = 100, y = D.remuestrear(ts, ws, fsr, 'cubica'), t = y.map((_, i) => ts[0] + i / fsr), res = D.pendulo(t, y, L);
+  const e = res.g / g - 1, e0 = res.g0 / g - 1;
+  return { pasa: Math.abs(e) < 0.003, detalle: `g = ${fx(res.g, 4)} ± ${fx(res.sg, 4)} m/s² (${fx(100 * e, 3)} %) con ${res.n} ciclos; θ₀ medio = ${fx(res.th0 * 180 / Math.PI, 2)}° (por integración: ${fx(res.thInt * 180 / Math.PI, 2)}°); aproximación de ángulo pequeño: ${fx(res.g0, 3)} (${fx(100 * e0, 2)} %)` };
+});
+
+prueba('Remuestreo con jitter de 2 ms: error cúbico < 1 % de la amplitud; huecos de una muestra detectados con jitter de 0,5 ms', () => {
+  const r = D.rng(8), fs = 100, f = 7.3, gen = (jit, saltar) => { const ts = [], xs = []; let h = 0;
+    for (let k = 0; k < 3000; k++) { if (saltar && k % 700 === 350) { h++; continue; } const tk = k / fs + jit * D.normal(r); ts.push(tk); xs.push(Math.sin(2 * Math.PI * f * tk)); }
+    for (let i = 1; i < ts.length; i++) if (ts[i] <= ts[i - 1]) ts[i] = ts[i - 1] + 1e-4; return { ts, xs, h }; };
+  const { ts, xs } = gen(0.002, false), out = {};
+  for (const met of ['lineal', 'cubica']) {
+    const y = D.remuestrear(ts, xs, fs, met); let e = 0;
+    for (let i = 0; i < y.length; i++) e += (y[i] - Math.sin(2 * Math.PI * f * (ts[0] + i / fs))) ** 2; out[met] = Math.sqrt(e / y.length);
+  }
+  let ing = 0; for (let i = 0; i < xs.length; i++) ing += (xs[i] - Math.sin(2 * Math.PI * f * (ts[0] + i / fs))) ** 2; ing = Math.sqrt(ing / xs.length);
+  const m2 = D.analizarMuestreo(ts), g = gen(0.0005, true), m = D.analizarMuestreo(g.ts);
+  return { pasa: out.cubica < 0.01 && m.huecos.length === g.h && m2.huecos.length === 0, detalle: `RMS de error (amplitud 1, jitter 2 ms): cúbica ${fe(out.cubica, 2)}, lineal ${fe(out.lineal, 2)}, sin remuestrear (suponer malla uniforme) ${fe(ing, 2)}; jitter medido ${fx(1000 * m2.jitter, 2)} ms, falsos huecos ${m2.huecos.length}. Con jitter 0,5 ms: huecos detectados ${m.huecos.length}/${g.h}; fs efectiva ${fx(m.fs, 3)} Hz` };
+});
+
+prueba('Butterworth: −3,01 dB en el corte (paso bajo/alto, órdenes 2/4/6; diseño y filtrado ida y vuelta medido con un seno)', () => {
+  const fs = 200, out = []; let ok = true;
+  for (const tipo of ['bajo', 'alto']) for (const n of [2, 4, 6]) {
+    const fc = 10, H = 20 * Math.log10(D.respuestaSOS(D.butter(n, fc, fs, tipo), fc, fs));
+    const N = 8000, x = new Float64Array(N); for (let i = 0; i < N; i++) x[i] = Math.sin(2 * Math.PI * fc * i / fs);
+    const y = D.filtrar(x, fs, { tipo, f1: fc, f2: fc, orden: n }); let a = 0, b = 0; for (let i = 2000; i < 6000; i++) { a += y[i] * y[i]; b += x[i] * x[i]; }
+    const Hm = 10 * Math.log10(a / b); ok = ok && Math.abs(H + 3.0103) < 0.01 && Math.abs(Hm + 3.0103) < 0.05;
+    out.push(`${tipo} n=${n}: diseño ${fx(H, 3)} dB, ida y vuelta ${fx(Hm, 3)} dB`);
+  }
+  return { pasa: ok, detalle: out.join('; ') };
+});
+
+prueba('Ponderaciones ISO 2631-1 Wk y Wd en frecuencias de la tabla 3 de la norma (tolerancia 2 %)', () => {
+  // Factores ×1000 de ISO 2631-1:1997, tabla 3 (frecuencias nominales de tercio de octava).
+  const Wk = { 0.1: 31.2, 0.2: 121, 0.5: 418, 1: 482, 2: 531, 5: 1039, 6.3: 1054, 8: 1036, 10: 988, 16: 768, 31.5: 405, 63: 186 };
+  const Wd = { 0.1: 62.4, 0.5: 853, 1: 1011, 2: 890, 4: 512, 8: 253, 16: 125, 31.5: 63.2 };
+  let peor = 0; const out = [];
+  for (const [nom, tab] of [['Wk', Wk], ['Wd', Wd]]) for (const [f, v] of Object.entries(tab)) {
+    const m = 1000 * D.ponderacion(+f, nom).mag, e = m / v - 1; peor = Math.max(peor, Math.abs(e)); out.push(`${nom}(${f}) ${fx(m, 1)}/${v}`);
+  }
+  return { pasa: peor < 0.02, detalle: `máx. desviación ${fx(100 * peor, 2)} %. Calculado/tabla: ${out.join(', ')}` };
+});
+
+prueba('a_w y VDV de un seno de 1 m/s² RMS a 5 Hz con Wk (a_w = W(5)·1; VDV = a_w·(1,5·T)^¼·… )', () => {
+  const fs = 200, T = 60, N = fs * T, x = new Float64Array(N); for (let i = 0; i < N; i++) x[i] = Math.SQRT2 * Math.sin(2 * Math.PI * 5 * i / fs);
+  const c = D.confortISO2631(x, fs, 'Wk'), W = D.ponderacion(5, 'Wk').mag, vdvT = W * Math.SQRT2 * Math.pow(3 / 8 * T, 0.25);
+  return { pasa: Math.abs(c.aw / W - 1) < 0.01 && Math.abs(c.vdv / vdvT - 1) < 0.01, detalle: `a_w = ${fx(c.aw, 4)} (teórico ${fx(W, 4)}); VDV = ${fx(c.vdv, 4)} (teórico A·W·(3T/8)^¼ = ${fx(vdvT, 4)}); cresta ${fx(c.cresta, 3)} (√2 = 1,414)` };
+});
+
+prueba('Estadísticos de una gaussiana (curtosis 3, asimetría 0, cresta) y de un seno (RMS = A/√2, curtosis 1,5)', () => {
+  const r = D.rng(9), N = 200000, g = new Float64Array(N); for (let i = 0; i < N; i++) g[i] = 2 + 0.5 * D.normal(r);
+  const s = D.estadisticos(g), x = seno(100000, 1000, 7, 3, 0, 0, null), q = D.estadisticos(x);
+  return { pasa: Math.abs(s.curtosis - 3) < 0.05 && Math.abs(s.asimetria) < 0.02 && Math.abs(s.rms - 0.5) < 0.005 && Math.abs(q.rms - 3 / Math.SQRT2) < 1e-3 && Math.abs(q.curtosis - 1.5) < 1e-3,
+    detalle: `gaussiana: media ${fx(s.media)}, RMS ${fx(s.rms)}, curtosis ${fx(s.curtosis, 3)}, asimetría ${fx(s.asimetria, 3)}, cresta ${fx(s.cresta, 2)}; seno: RMS ${fx(q.rms)}, curtosis ${fx(q.curtosis, 4)}, cresta ${fx(q.cresta, 4)}` };
+});
+
+prueba('Calibración de 6 posiciones: recupera ganancia y offset por eje', () => {
+  const g = 9.78, gan = [1.012, 0.991, 1.004], off = [0.08, -0.05, 0.21], med = {};
+  const pos = { xp: [g, 0, 0], xn: [-g, 0, 0], yp: [0, g, 0], yn: [0, -g, 0], zp: [0, 0, g], zn: [0, 0, -g] };
+  for (const [k, v] of Object.entries(pos)) med[k] = v.map((a, i) => gan[i] * a + off[i]);
+  const c = D.calibrar6(med, g); let e = 0; for (let i = 0; i < 3; i++) e = Math.max(e, Math.abs(c.ganancia[i] - gan[i]), Math.abs(c.offset[i] - off[i]));
+  return { pasa: e < 1e-12, detalle: `máx error ${fe(e)}; ganancias ${c.ganancia.map(v => fx(v, 4)).join(', ')}; offsets ${c.offset.map(v => fx(v, 3)).join(', ')}` };
+});
+
+prueba('Coherencia: 1 en un modo común a dos ejes, ≈ 0 entre ruidos independientes', () => {
+  const r = D.rng(10), fs = 100, N = 1 << 15, x = new Float64Array(N), y = new Float64Array(N);
+  for (let i = 0; i < N; i++) { const m = Math.sin(2 * Math.PI * 4 * i / fs + 0.1 * Math.sin(i / 500)); x[i] = m + 0.3 * D.normal(r); y[i] = 0.5 * m + 0.3 * D.normal(r); }
+  const c = D.coherencia(x, y, fs, { nseg: 512 }), i4 = Math.round(4 / c.df); let fondo = 0, n = 0;
+  for (let i = 0; i < c.f.length; i++) if (c.f[i] > 10 && c.f[i] < 45) { fondo += c.coh[i]; n++; }
+  fondo /= n;
+  return { pasa: c.coh[i4] > 0.95 && fondo < 0.05, detalle: `coherencia en 4 Hz = ${fx(c.coh[i4], 4)}; media en 10–45 Hz = ${fx(fondo, 4)} (esperado ≈ 1/K = ${fx(1 / c.K, 4)})` };
+});
+
+prueba('Máquina sintética: detecta 1× = 14,8 Hz y amplitudes de velocidad de 1×/2×/3× (±2 %)', () => {
+  const r = D.rng(11), fs = 200, N = 1 << 14, f1 = 14.8, A = [0.8, 0.3, 0.12], x = new Float64Array(N);
+  for (let i = 0; i < N; i++) { const t = i / fs; x[i] = 0.05 * D.normal(r); for (let k = 0; k < 3; k++) x[i] += A[k] * Math.cos(2 * Math.PI * (k + 1) * f1 * t + k); }
+  const esp = D.welch(x, fs, { nseg: 2048 }), a = D.armonicos(x, fs, esp, { fmin: 2 }); let e = 0;
+  for (let k = 0; k < 3; k++) e = Math.max(e, Math.abs(a.lista[k].velRMS / (A[k] / (2 * Math.PI * (k + 1) * f1) / Math.SQRT2) - 1));
+  return { pasa: Math.abs(a.f1 - f1) < 0.01 && e < 0.02, detalle: `f₁ = ${fx(a.f1, 4)} ± ${fe(a.sf1, 1)} Hz; máx error en velocidad de armónicos ${fx(100 * e, 3)} %; 1× = ${fx(1000 * a.lista[0].velRMS, 3)} mm/s RMS. Diagnóstico: ${D.diagnosticoMaquina(a).map(d => d[0]).join(', ')}` };
+});
+
+document.getElementById('informe').innerHTML = filas.join('');
+document.getElementById('resumen').textContent = `RESUMEN: ${npasa} PASA, ${nfalla} FALLA`;
+</script>
+</body>
+</html>
