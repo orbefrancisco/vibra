@@ -182,7 +182,7 @@ class Captura {
   detener() { for (const p of this._parar) { try { p(); } catch (e) { /* nada */ } } this._parar = []; this.fuente = null; this.generador = null; }
 
   _push(flujo, tms, x, y, z) {
-    if (!(isFinite(x) && isFinite(y) && isFinite(z))) return;
+    if (!(isFinite(x) && isFinite(y) && isFinite(z) && isFinite(tms) && tms !== null)) return;
     const t = tms / 1000, c = this.cal;
     if (c) {
       if (flujo === 'acc' && c.acc) { x = (x - c.acc.offset[0]) / c.acc.ganancia[0]; y = (y - c.acc.offset[1]) / c.acc.ganancia[1]; z = (z - c.acc.offset[2]) / c.acc.ganancia[2]; }

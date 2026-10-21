@@ -266,7 +266,7 @@ async function terminarGrabacion() {
   const G0 = E.grabando; if (!G0) return; E.grabando = null; E.cap.alMuestra = null;
   $('btnGrabar').disabled = false; $('btnParar').disabled = true; $('barraProg').style.width = '0';
   if (G0.estado !== 'grabando') { $('estadoGrab').hidden = true; return; }
-  const nombre = $('nombreGrab').value.trim() || `Medición ${new Date().toLocaleString('es-DO', { dateStyle: 'short', timeStyle: 'short' })}`;
+  const nombre = $('nombreGrab').value.trim() || `Medición ${E.lista.length + 1}`;
   const g = E.cap.terminarGrabacion({ nombre });
   $('cuenta').textContent = '✓'; $('txtGrab').innerHTML = g ? `Guardada «${esc(nombre)}» (${fmt(g.duracion, 1)} s). <button class="btn peq" id="irAnalizar">Analizar</button>` : 'No llegaron datos.';
   if (g) { await agregarGrabacion(g); $('irAnalizar').onclick = () => irA('analizar'); }
@@ -350,10 +350,11 @@ function dibujarAjuste() {
     ['Desplazamiento c', conInc(a.c, a.sc, u)], ['χ²/ν (ruido por diferencias)', fmt(a.chi2nu, 2) + (a.chi2nu > 2 ? ' — el modelo no describe todo (¿no linealidad, otro modo, roce seco?)' : '')],
     ['RMS de residuos / ruido', `${fsig(a.sResid, 3)} / ${fsig(a.sigmaRuido, 3)} ${u}`], ['ρ₁ de residuos', fmt(a.rho1, 3) + (a.factorCorr > 1 ? ` (σ inflada ×${fmt(Math.sqrt(a.factorCorr), 2)})` : '')], ['N · iteraciones', `${a.N} · ${a.iter}${a.convergio ? '' : ' (sin convergencia plena)'}`]];
   const met = (n, nota) => `${n}<br><small class="nota">${nota}</small>`;
-  const comp = [[met('Ajuste LM', 'envolvente y fase de todo el tramo'), conInc(a.zeta, a.szeta), conInc(a.Q, a.sQ)],
-    [met('Decremento logarítmico', dl ? `δ = ${conInc(dl.delta, dl.sdelta)} por ciclo, ${dl.npicos} picos` : 'pocos picos sobre el ruido'), dl ? conInc(dl.zeta, dl.szeta) : '—', dl ? fmt(dl.Q, 1) : '—'],
-    [met('Media potencia (PSD)', mp ? `Δf = ${fmt(mp.ancho, 4)} Hz${mp.limitado ? ' · <b>limitado por la resolución</b> (1/T = ' + fmt(mp.resolucion, 3) + ' Hz): sesgado hacia arriba' : ''}` : 'sin pico'), mp ? fmt(mp.zeta, 5) : '—', mp ? fmt(mp.Q, 1) : '—']];
-  $('resAjuste').innerHTML = `<div class="tabla">${tabla(['Parámetro', 'Valor ± 1σ'], filas)}</div><h2 style="margin-top:12px">Comparación de métodos</h2><div class="tabla">${tabla(['Método', 'ζ', 'Q'], comp)}</div>`;
+  const zq = (z, q) => `${z}<br><small class="nota">Q = ${q}</small>`;
+  const comp = [[met('Ajuste LM', 'envolvente y fase de todo el tramo'), zq(conInc(a.zeta, a.szeta), conInc(a.Q, a.sQ))],
+    [met('Decremento logarítmico', dl ? `δ = ${conInc(dl.delta, dl.sdelta)} por ciclo, ${dl.npicos} picos` : 'pocos picos sobre el ruido'), dl ? zq(conInc(dl.zeta, dl.szeta), fmt(dl.Q, 1)) : '—'],
+    [met('Media potencia (PSD)', mp ? `Δf = ${fmt(mp.ancho, 4)} Hz${mp.limitado ? ' · <b>limitado por la resolución</b> (1/T = ' + fmt(mp.resolucion, 3) + ' Hz): sesgado hacia arriba' : ''}` : 'sin pico'), mp ? zq(fmt(mp.zeta, 5), fmt(mp.Q, 1)) : '—']];
+  $('resAjuste').innerHTML = `<div class="tabla">${tabla(['Parámetro', 'Valor ± 1σ'], filas)}</div><h2 style="margin-top:12px">Comparación de métodos</h2><div class="tabla">${tabla(['Método', 'ζ (y Q)'], comp)}</div>`;
   const mod = tr.t.map(t => a.modelo(t)), env = tr.t.map(t => a.A * Math.exp(-(t - a.t0) / a.tau)), envN = env.map((v, i) => -v + a.c);
   $('gAjuste').hidden = $('gResid').hidden = false;
   GR.ajuste.set({ series: [{ x: tr.t, y: tr.y, color: c.muted, ancho: 1, nombre: 'datos' }, { x: tr.t, y: mod, color: c.ajuste, ancho: 1.6, nombre: 'ajuste' }, { x: tr.t, y: env.map(v => v + a.c), color: c.ajuste, ancho: 1, guiones: [4, 4], nombre: 'envolvente' }, { x: tr.t, y: envN, color: c.ajuste, ancho: 1, guiones: [4, 4] }],
@@ -578,7 +579,7 @@ function desdeCSV(texto, nombre) {
     for (const [f, a] of Object.entries(L)) if (S.FLUJOS[f]) flujos[f] = { t: Float64Array.from(a, r => r[0]), x: Float64Array.from(a, r => r[1]), y: Float64Array.from(a, r => r[2]), z: Float64Array.from(a, r => r[3]) };
   } else {
     const it = cab.findIndex(c => c.startsWith('time') || c.startsWith('t_s') || c === 't' || c.startsWith('tiempo')); if (it < 0) throw new Error('no se encontró la columna de tiempo');
-    const tipoDe = c => /gyro|rad\/s|rotation|giro/.test(c) ? 'gyr' : /magnet|µt|ut\b/.test(c) ? 'mag' : /linear|without|sin g|lin_/.test(c) ? 'lin' : /acc|m\/s\^2|m\/s²/.test(c) ? 'acc' : null;
+    const tipoDe = c => /gyr|rad\/s|rotation|giro/.test(c) ? 'gyr' : /magnet|^mag|µt|\but\b/.test(c) ? 'mag' : /linear|without|sin g|lin_/.test(c) ? 'lin' : /acc|m\/s\^2|m\/s²/.test(c) ? 'acc' : null;
     const grupos = {}; cab.forEach((c, j) => { if (j === it) return; const f = tipoDe(c), e = /(^|[\s_])x\b|_x$| x /.test(c) ? 'x' : /(^|[\s_])y\b|_y$| y /.test(c) ? 'y' : /(^|[\s_])z\b|_z$| z /.test(c) ? 'z' : null; if (f && e) (grupos[f] = grupos[f] || {})[e] = j; });
     for (const [f, ej] of Object.entries(grupos)) if (ej.x !== undefined && ej.y !== undefined && ej.z !== undefined) {
       const ok = filas.filter(r => isFinite(r[it]) && isFinite(r[ej.x])); flujos[f] = { t: Float64Array.from(ok, r => r[it]), x: Float64Array.from(ok, r => r[ej.x]), y: Float64Array.from(ok, r => r[ej.y]), z: Float64Array.from(ok, r => r[ej.z]) };
