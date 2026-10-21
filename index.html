@@ -6,6 +6,11 @@
 <title>Vibra</title>
 <meta name="description" content="Análisis fino de vibraciones con los sensores del teléfono">
 <meta name="robots" content="noindex, nofollow">
+<!-- Seguridad (GitHub Pages no deja poner cabeceras): CSP por meta. Sin scripts en línea ni eval; todo el JS viene de archivos de esta app.
+     style-src lleva 'unsafe-inline' por el <style> de esta página y los style="" de las plantillas (CSS, no ejecuta código).
+     frame-ancestors (impedir que otra web la meta en un marco) NO funciona en una meta: solo como cabecera HTTP, que Pages no permite. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self'; font-src 'self'; connect-src 'self'; media-src 'none'; worker-src 'self'; manifest-src 'self'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+<meta name="referrer" content="no-referrer">
 <link rel="icon" href="icono.svg">
 <link rel="manifest" href="manifest.json">
 <link rel="apple-touch-icon" href="icono-192.png">

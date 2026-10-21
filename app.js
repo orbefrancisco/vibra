@@ -41,7 +41,92 @@ const PERSISTIR = ['fuente', 'freqPedida', 'demoTipo', 'demoFs', 'usarMag', 'viv
 function leerLS(k, def) { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : def; } catch (e) { return def; } }
 function guardarLS(k, v) { try { if (v === null) localStorage.removeItem(k); else localStorage.setItem(k, JSON.stringify(v)); } catch (e) { /* sin almacenamiento */ } }
 function guardarConfig() { const c = {}; for (const id of PERSISTIR) { const el = $(id); if (el) c[id] = el.type === 'checkbox' ? el.checked : el.value; } guardarLS('vibra-config', c); }
-function cargarConfig() { const c = leerLS('vibra-config', {}); for (const id of PERSISTIR) { const el = $(id); if (el && c[id] !== undefined) { if (el.type === 'checkbox') el.checked = c[id]; else if (el.tagName !== 'SELECT' || [...el.options].some(o => o.value === c[id])) el.value = c[id]; } } }
+// Ajustes guardados (el origen se comparte con otras apps): casillas solo booleanas, listas solo con una opción que exista,
+// campos numéricos solo con cifras, signo, coma/punto o exponente. Lo demás se ignora.
+function cargarConfig() {
+  const c = leerLS('vibra-config', {}); if (!c || typeof c !== 'object' || Array.isArray(c)) return;
+  for (const id of PERSISTIR) {
+    const el = $(id), v = Object.prototype.hasOwnProperty.call(c, id) ? c[id] : undefined; if (!el || v === undefined) continue;
+    if (el.type === 'checkbox') { if (typeof v === 'boolean') el.checked = v; }
+    else if (typeof v !== 'string' || v.length > 40) continue;
+    else if (el.tagName === 'SELECT') { if ([...el.options].some(o => o.value === v)) el.value = v; }
+    else if (/^[\d\s.,+\-eE]{0,20}$/.test(v)) el.value = v;
+  }
+}
+
+/* ============================================================ datos no confiables
+   Todo lo que llega de localStorage, de IndexedDB o de un archivo importado se valida campo por campo antes de usarse:
+   números finitos y en rango, textos cortos sin caracteres de control, fechas legibles, arreglos con tamaño máximo.
+   Lo que no encaja se descarta y se cuenta (nunca se ejecuta nada). Además, al pintar, todo texto que no sea literal
+   del código pasa por esc() o textContent. */
+const LIM = { texto: 200, notas: 2000, muestras: 4e6, ref: 1e6, valor: 1e6, archivoMB: 256 };
+const tiene = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
+const esNum = (v, lo = -Infinity, hi = Infinity) => typeof v === 'number' && Number.isFinite(v) && v >= lo && v <= hi;
+const texto = (v, max = LIM.texto) => typeof v === 'string' ? v.replace(/[\u0000-\u001f\u007f]+/g, ' ').trim().slice(0, max) : '';
+const FECHA_RE = /^\d{4}-\d{2}-\d{2}([T ]\d{2}:\d{2}(:\d{2}(\.\d{1,6})?)?(Z|[+-]\d{2}:?\d{2})?)?$/;   // ISO 8601 (Date.parse es demasiado permisivo)
+const fechaOk = v => { if (!(typeof v === 'number' || (typeof v === 'string' && FECHA_RE.test(v)))) return null; const t = new Date(v).getTime(); return Number.isFinite(t) && t > Date.UTC(1990, 0, 1) && t < Date.UTC(2200, 0, 1) ? new Date(t).toISOString() : null; };
+const ID_OK = /^[\w-]{1,64}$/;
+const fuenteOk = f => typeof f === 'string' && f.length <= 40 && (['generico', 'devicemotion', 'importada'].includes(f) || (f.startsWith('demo:') && tiene(S.DEMOS, f.slice(5))));
+const nuevoId = () => 'g' + Date.now().toString(36) + Math.floor(Math.random() * 1e5).toString(36);
+const esArr = a => Array.isArray(a) || (ArrayBuffer.isView(a) && !(a instanceof DataView));
+const vec3 = (a, lo, hi) => esArr(a) && a.length === 3 && Array.prototype.every.call(a, v => esNum(v, lo, hi)) ? Array.from(a) : null;
+const contador = () => ({ grab: 0, flujos: 0, muestras: 0, campos: 0 });
+const txtDescartes = c => { const p = []; if (c.grab) p.push(`${c.grab} ${c.grab > 1 ? 'grabaciones ilegibles' : 'grabación ilegible'}`); if (c.flujos) p.push(`${c.flujos} sensor${c.flujos > 1 ? 'es' : ''} desconocido${c.flujos > 1 ? 's' : ''} o sin datos válidos`);
+  if (c.muestras) p.push(`${c.muestras} muestra${c.muestras > 1 ? 's' : ''} inválida${c.muestras > 1 ? 's' : ''} (no numéricas, fuera de rango o con el tiempo hacia atrás)`); if (c.campos) p.push(`${c.campos} campo${c.campos > 1 ? 's' : ''} inválido${c.campos > 1 ? 's' : ''}`);
+  return p.length ? 'Descartado: ' + p.join('; ') + '.' : ''; };
+/** Calibración: ganancias 0,2–5, offsets ±20 m/s², sesgo del giroscopio ±10 rad/s. */
+function normCal(c, cnt) {
+  if (c === null || c === undefined) return null;
+  if (typeof c !== 'object') { if (cnt) cnt.campos++; return null; }
+  const o = {};
+  if (c.acc) { const g = vec3(c.acc.ganancia, 0.2, 5), of = vec3(c.acc.offset, -20, 20); if (g && of) { o.acc = { ganancia: g, offset: of, fecha: fechaOk(c.acc.fecha) || '' }; if (esNum(c.acc.g, 1, 20)) o.acc.g = c.acc.g; } else if (cnt) cnt.campos++; }
+  if (c.gyr) { const s = vec3(c.gyr.sesgo, -10, 10); if (s) o.gyr = { sesgo: s, fecha: fechaOk(c.gyr.fecha) || '' }; else if (cnt) cnt.campos++; }
+  return o.acc || o.gyr ? o : null;
+}
+/** Un flujo {t,x,y,z}: arreglos numéricos de igual largo (≤ LIM.muestras), valores finitos (|v| ≤ 1e6) y tiempo creciente.
+ *  Las filas que no cumplen se descartan y se cuentan. Si todo está bien y ya son Float64Array, se usa tal cual (sin copiar). */
+function normFlujo(d, cnt) {
+  if (!d || typeof d !== 'object') return null;
+  const A = ['t', 'x', 'y', 'z'].map(k => d[k]); if (!A.every(esArr)) return null;
+  const nMin = Math.min(...A.map(a => a.length)), nMax = Math.max(...A.map(a => a.length)), n = Math.min(nMin, LIM.muestras);
+  const T = A[0], X = A[1], Y = A[2], Z = A[3], V = LIM.valor, ok = new Uint8Array(n); let k = 0, tAnt = -Infinity;
+  for (let i = 0; i < n; i++) {
+    const t = T[i], x = X[i], y = Y[i], z = Z[i];
+    if (esNum(t, -1e13, 1e13) && t > tAnt && esNum(x, -V, V) && esNum(y, -V, V) && esNum(z, -V, V)) { ok[i] = 1; k++; tAnt = t; }
+  }
+  if (cnt) cnt.muestras += nMax - k;
+  if (k < 3) return null;
+  if (k === nMax && A.every(a => a instanceof Float64Array)) return Object.keys(d).length === 4 ? d : { t: T, x: X, y: Y, z: Z };
+  const o = { t: new Float64Array(k), x: new Float64Array(k), y: new Float64Array(k), z: new Float64Array(k) };
+  for (let i = 0, j = 0; i < n; i++) if (ok[i]) { o.t[j] = T[i]; o.x[j] = X[i]; o.y[j] = Y[i]; o.z[j] = Z[i]; j++; }
+  return o;
+}
+/** Grabación guardada (importada = false) o importada (true). Devuelve null si no queda ningún sensor útil. */
+function normGrab(o, importada, cnt) {
+  if (!o || typeof o !== 'object' || Array.isArray(o)) return null;
+  const fl = o.flujos && typeof o.flujos === 'object' && !Array.isArray(o.flujos) ? o.flujos : {}, flujos = {};
+  for (const f of Object.keys(fl)) { if (!tiene(S.FLUJOS, f)) { cnt.flujos++; continue; } const d = normFlujo(fl[f], cnt); if (d) flujos[f] = d; else cnt.flujos++; }
+  const b = flujos.acc || flujos.lin || flujos.gyr; if (!b) return null;   // sin acelerómetro ni giroscopio no hay nada que analizar
+  const id = importada ? nuevoId() : typeof o.id === 'string' && ID_OK.test(o.id) ? o.id : null; if (!id) { cnt.campos++; return null; }
+  const mal = (v, bien) => { if (v !== undefined && v !== null && v !== '' && !bien) cnt.campos++; return bien; };
+  const nombre = texto(o.nombre), fecha = fechaOk(o.fecha), dur = b.t[b.t.length - 1] - b.t[0];
+  mal(o.nombre, typeof o.nombre === 'string' && o.nombre.length <= LIM.texto); mal(o.fecha, !!fecha); mal(o.notas, typeof o.notas === 'string' && o.notas.length <= LIM.notas);
+  return {
+    id, nombre: nombre || (importada ? 'Importada' : 'sin nombre'), fecha: fecha || new Date().toISOString(),
+    fuente: mal(o.fuente, fuenteOk(o.fuente)) ? o.fuente : 'importada',
+    frecuenciaPedida: mal(o.frecuenciaPedida, esNum(o.frecuenciaPedida, 0, 1e5)) ? o.frecuenciaPedida : null,
+    duracion: !importada && esNum(o.duracion, 0, 1e7) ? o.duracion : dur,
+    notas: texto(o.notas, LIM.notas), cal: normCal(o.cal, cnt), flujos
+  };
+}
+/** Referencia de máquina guardada: espectro {f, psd} numérico del mismo largo y parámetros en rango. */
+function normRef(r) {
+  if (!r || typeof r !== 'object') return null;
+  const arr = a => esArr(a) && a.length >= 2 && a.length <= LIM.ref && Array.prototype.every.call(a, v => esNum(v)) ? Array.from(a) : null;
+  const f = arr(r.f), psd = arr(r.psd);
+  if (!f || !psd || f.length !== psd.length || !esNum(r.df, 1e-9, 1e5) || !esNum(r.fs, 1e-3, 1e6) || !esNum(r.fmin, 0, 1e6)) return null;
+  return { nombre: texto(r.nombre) || 'referencia', fecha: fechaOk(r.fecha) || new Date().toISOString(), f, psd, df: r.df, fs: r.fs, eje: ['x', 'y', 'z', 'mag'].includes(r.eje) ? r.eje : '?', fmin: r.fmin };
+}
 
 /* ============================================================ IndexedDB */
 const BD = {
@@ -57,7 +142,11 @@ const BD = {
 };
 async function cargarLista() {
   if (E.efimero) return;
-  try { E.lista = (await BD.todas()) || []; } catch (e) { E.sinBD = true; }
+  let crudas = [];
+  try { crudas = (await BD.todas()) || []; } catch (e) { E.sinBD = true; }
+  const cnt = contador(); E.lista = [];
+  for (const o of crudas) { const g = normGrab(o, false, cnt); if (g) E.lista.push(g); else cnt.grab++; }
+  const d = txtDescartes(cnt); if (d) aviso('Datos guardados revisados al abrir (no se borró nada del teléfono). ' + d);
   E.lista.sort((a, b) => b.fecha.localeCompare(a.fecha));
 }
 async function agregarGrabacion(g, abrir = true) {
@@ -70,7 +159,7 @@ function seleccionar(id) {
   E.actual = E.lista.find(g => g.id === id) || null; E.sel = null; E.zoom = null; E.ajuste = null; E.pendulo = null; cacheRem.clear();
   if (E.actual) {
     const fl = Object.keys(E.actual.flujos);
-    $('aFlujo').innerHTML = fl.map(f => `<option value="${f}">${S.FLUJOS[f].nombre}</option>`).join('');
+    $('aFlujo').innerHTML = fl.map(f => `<option value="${esc(f)}">${esc(S.FLUJOS[f].nombre)}</option>`).join('');
     $('aFlujo').value = E.actual.fuente === 'demo:pendulo' && fl.includes('gyr') ? 'gyr' : fl.includes('lin') ? 'lin' : fl[0];
     $('aEje').value = E.actual.fuente === 'demo:pendulo' ? 'x' : E.actual.fuente === 'demo:maquina' || E.actual.fuente === 'demo:maquina-falla' ? 'x' : 'z';
   }
@@ -163,7 +252,7 @@ function aviso(txt) {
 /* ============================================================ selector de grabación */
 function renderSelector() {
   const s = $('selGrab');
-  s.innerHTML = E.lista.length ? E.lista.map(g => `<option value="${g.id}">${esc(g.nombre || 'sin nombre')} · ${new Date(g.fecha).toLocaleString('es-DO', { dateStyle: 'short', timeStyle: 'short' })}</option>`).join('') : '<option value="">(sin grabaciones)</option>';
+  s.innerHTML = E.lista.length ? E.lista.map(g => `<option value="${esc(g.id)}">${esc(g.nombre || 'sin nombre')} · ${new Date(g.fecha).toLocaleString('es-DO', { dateStyle: 'short', timeStyle: 'short' })}</option>`).join('') : '<option value="">(sin grabaciones)</option>';
   if (E.actual) s.value = E.actual.id;
   const g = E.actual;
   if (!g) { $('infoGrab').innerHTML = 'Sin grabación seleccionada.'; return; }
@@ -369,10 +458,10 @@ function hacerPendulo() {
   let t = r.t, w = r[eje];
   if (E.sel) { const i0 = Math.max(0, Math.round((E.sel[0] - r.t[0]) * r.fs)), i1 = Math.min(r.n, Math.round((E.sel[1] - r.t[0]) * r.fs) + 1); t = t.subarray(i0, i1); w = w.subarray(i0, i1); }
   const L = num('pL', 0.75), p = D.pendulo(t, w, L);
-  if (!p) { $('resPendulo').innerHTML = '<p class="error">No se encontraron al menos 3 ciclos de oscilación en el eje ' + eje + '.</p>'; return; }
+  if (!p) { $('resPendulo').innerHTML = '<p class="error">No se encontraron al menos 3 ciclos de oscilación en el eje ' + esc(eje) + '.</p>'; return; }
   const deg = 180 / Math.PI;
   $('resPendulo').innerHTML = `<div class="indic">${indic([['g (exacta, K(k))', conInc(p.g, p.sg), 'm/s²'], ['Periodo T', conInc(p.T, p.sT), 's'], ['Amplitud θ₀ (ω·T)', conInc(p.th0 * deg, p.sth0 * deg), '°'], ['θ₀ integrando ω', fmt(p.thInt * deg, 2), '°'],
-    ['g ángulo pequeño', conInc(p.g0, p.sg0), 'm/s² (sesgada)'], ['g con serie en θ₀²', fmt(p.gSerie, 4), 'm/s² (T₀(1+θ₀²/16+…))'], ['Ciclos', p.n, 'eje ' + eje], ['Media de ω', fsig(p.sesgo, 3), 'rad/s (se resta)']])}</div>
+    ['g ángulo pequeño', conInc(p.g0, p.sg0), 'm/s² (sesgada)'], ['g con serie en θ₀²', fmt(p.gSerie, 4), 'm/s² (T₀(1+θ₀²/16+…))'], ['Ciclos', p.n, 'eje ' + esc(eje)], ['Media de ω', fsig(p.sesgo, 3), 'rad/s (se resta)']])}</div>
     <p class="nota">Incertidumbres: error estándar entre ciclos (estadístico). El error de L se propaga como σ_g/g = σ_L/L: con L = ${fmt(L, 3)} m y σ_L = 2 mm, ≈ ${fmt(100 * 0.002 / L, 2)} %.</p>`;
   const c = COL(); $('gPendulo').hidden = false;
   GR.pend.set({ series: [{ x: t, y: p.theta.map(v => v * deg), color: c.x, ancho: 1.2, nombre: 'θ integrado (°)' }, { x: p.ciclos.map(q => q.t), y: p.ciclos.map(q => q.th0 * deg), color: c.ajuste, puntos: true, nombre: 'θ₀ por ciclo (°)' }], yEtiqueta: '°' });
@@ -396,7 +485,7 @@ function renderMaquinas() {
   const vrms = D.rmsBanda(vel, fmin, ny) * 1e3, arms = D.rmsBanda(esp, fmin, ny), st = D.estadisticos(s.y), zona = D.zona20816(vrms, clase);
   const rpm = num('mRpm', NaN), arm = D.armonicos(s.y, s.fs, esp, { fmin: Math.min(fmin, 2), f1: isFinite(rpm) && rpm > 0 ? rpm / 60 : undefined });
   $('mGlobal').innerHTML = indic([[`v RMS ${fmt(fmin, 0)}–${fmt(ny, 0)} Hz`, fmt(vrms, 2), 'mm/s'], ['Zona orientativa', zona, D.ZONAS_20816[clase].lim.map(v => fmt(v, 1)).join(' / ') + ' mm/s'], [`a RMS ${fmt(fmin, 0)}–${fmt(ny, 0)} Hz`, fsig(arms, 3), 'm/s²'],
-    ['Pico de a', fsig(st.pico, 3), 'm/s²'], ['Cresta', fmt(st.cresta, 2), ''], ['Curtosis', fmt(st.curtosis, 2), '> 3: impactos'], ['1× (f₁)', arm ? conInc(arm.f1, arm.sf1, 'Hz') : '—', arm ? fmt(arm.rpm, 0) + ' rpm' : ''], ['Eje', s.eje, S.FLUJOS[s.flujo].corto]]);
+    ['Pico de a', fsig(st.pico, 3), 'm/s²'], ['Cresta', fmt(st.cresta, 2), ''], ['Curtosis', fmt(st.curtosis, 2), '> 3: impactos'], ['1× (f₁)', arm ? conInc(arm.f1, arm.sf1, 'Hz') : '—', arm ? fmt(arm.rpm, 0) + ' rpm' : ''], ['Eje', esc(s.eje), esc(S.FLUJOS[s.flujo].corto)]]);
   const avisos = [`<p class="aviso">ISO 20816 mide la velocidad RMS entre 10 y 1000 Hz con un acelerómetro fijo a la carcasa. Esta medición cubre solo ${fmt(fmin, 0)}–${fmt(ny, 1)} Hz (Nyquist): <b>la zona es solo orientativa</b> y subestima si hay vibración por encima de ${fmt(ny, 0)} Hz.</p>`,
     `<p class="aviso"><b>Aliasing:</b> una máquina que gire a más de ${fmt(ny * 60, 0)} rpm (Nyquist × 60) muestra su 1× en una frecuencia falsa. Un armónico f aparece en |f − m·fs| (el m que lo deja en 0–${fmt(ny, 1)} Hz). Ejemplo con esta fs: un motor de 3550 rpm (59,2 Hz) aparecería en ${fmt(Math.abs(59.17 - Math.round(59.17 / s.fs) * s.fs), 1)} Hz.</p>`];
   if (isFinite(rpm) && rpm / 60 > ny) avisos.push(`<p class="error">La velocidad indicada (${fmt(rpm / 60, 2)} Hz) supera Nyquist: su 1× se verá en ${fmt(Math.abs(rpm / 60 - Math.round(rpm / 60 / s.fs) * s.fs), 2)} Hz.</p>`);
@@ -447,7 +536,7 @@ function renderEstructuras() {
   const cohEn = f => coh.coh[Math.min(coh.coh.length - 1, Math.round(f / coh.df))];
   GR.est.set({ series: ['x', 'y', 'z'].map(e => ({ x: esp[e].f, y: esp[e].psd, color: c[e], ancho: 1.2, nombre: e + (e === vert ? ' (vertical)' : '') })), xr: [0, fmax], xNombre: 'f', xUnidad: 'Hz',
     marcas: modos.slice(0, 6).map((m, i) => ({ x: m.f, texto: fmt(m.f, 2), fila: i % 3 })) });
-  $('tModos').innerHTML = modos.length ? tabla(['#', 'f ± σ (Hz)', 'ζ (½ pot.)', 'Eje', `γ² ${p1}–${p2}`],
+  $('tModos').innerHTML = modos.length ? tabla(['#', 'f ± σ (Hz)', 'ζ (½ pot.)', 'Eje', `γ² ${esc(p1)}–${esc(p2)}`],
     modos.map((m, i) => [i + 1, conInc(m.f, m.sf) + `<br><small class="nota">${fmt(m.promDb, 0)} dB sobre el fondo</small>`, m.limitado ? '<small>limitado por Δf</small>' : fmt(100 * m.zeta, 2) + ' %', m.eje + (m.eje === vert ? ' (v)' : ' (h)'), fmt(cohEn(m.f), 2)])) : '<p class="nota">Sin picos prominentes por debajo de la f máxima.</p>';
   $('comoEst').innerHTML = `<b>Cómo se calcula:</b> PSD de Welch (Hann, ${nseg} muestras ⇒ Δf = ${fmt(esp.x.df, 4)} Hz, ${esp.x.K} promedios en ${fmt(T / 60, 1)} min)${limit ? ' — <b>registro corto para la Δf pedida</b>' : ''}. Modos = picos prominentes de cada eje; ζ por ancho de media potencia (sesgada hacia arriba si el pico ocupa pocos bins: aumente la duración). σ_f ≈ √(ζ·f/(π·T)) para un modo excitado por ruido (aproximación), o la del tono si el pico es más angosto que la resolución.`;
   GR.coh.set({ series: [{ x: coh.f, y: coh.coh, color: c.mag, ancho: 1.2 }], xr: [0, fmax], yr: [0, 1.02], marcas: modos.slice(0, 4).map(m => ({ x: m.f })) });
@@ -538,8 +627,8 @@ function renderGrabaciones() {
   if (!E.lista.length) { el.innerHTML = '<p class="nota">Aún no hay grabaciones.</p>'; $('btnComparar').disabled = true; return; }
   el.innerHTML = E.lista.map(g => {
     const b = g.flujos.acc || g.flujos.lin || g.flujos.gyr, fs = (b.t.length - 1) / (b.t[b.t.length - 1] - b.t[0]);
-    return `<div class="item-grab" data-id="${g.id}"><div class="tit"><input type="checkbox" class="marcaComp" aria-label="Marcar para comparar"><span class="nom">${esc(g.nombre || 'sin nombre')}</span>${E.actual && E.actual.id === g.id ? '<span class="chip">actual</span>' : ''}</div>
-      <div class="meta">${new Date(g.fecha).toLocaleString('es-DO', { dateStyle: 'medium', timeStyle: 'short' })} · ${esc(fuenteTxt(g.fuente))} · ${fmt(g.duracion, 1)} s · ${fmt(fs, 1)} Hz · ${Object.keys(g.flujos).join(', ')}${g.cal ? ' · calibrada' : ''}</div>
+    return `<div class="item-grab" data-id="${esc(g.id)}"><div class="tit"><input type="checkbox" class="marcaComp" aria-label="Marcar para comparar"><span class="nom">${esc(g.nombre || 'sin nombre')}</span>${E.actual && E.actual.id === g.id ? '<span class="chip">actual</span>' : ''}</div>
+      <div class="meta">${new Date(g.fecha).toLocaleString('es-DO', { dateStyle: 'medium', timeStyle: 'short' })} · ${esc(fuenteTxt(g.fuente))} · ${fmt(g.duracion, 1)} s · ${fmt(fs, 1)} Hz · ${esc(Object.keys(g.flujos).join(', '))}${g.cal ? ' · calibrada' : ''}</div>
       <div class="grupo acciones"><button class="btn peq" data-acc="abrir">Abrir</button><button class="btn peq" data-acc="renombrar">Renombrar</button><button class="btn peq" data-acc="csv">CSV crudo</button><button class="btn peq" data-acc="csvr">CSV remuestreado</button><button class="btn peq" data-acc="json">JSON</button><button class="btn peq peligro" data-acc="borrar">Borrar</button></div></div>`;
   }).join('');
   if (navigator.storage && navigator.storage.estimate) navigator.storage.estimate().then(e => { $('txtAlmac').textContent = `${E.lista.length} · ${fmt(e.usage / 1e6, 1)} MB usados`; }).catch(() => {});
@@ -562,35 +651,46 @@ function csvRemuestreado(g) {
   return L.join('\n');
 }
 function aJSON(g) { const o = Object.assign({}, g, { flujos: {} }); for (const [f, d] of Object.entries(g.flujos)) o.flujos[f] = { t: Array.from(d.t), x: Array.from(d.x), y: Array.from(d.y), z: Array.from(d.z) }; o.formato = 'vibra-1'; return JSON.stringify(o); }
-function desdeObjeto(o) {
-  const flujos = {}; for (const [f, d] of Object.entries(o.flujos || {})) if (S.FLUJOS[f]) flujos[f] = { t: Float64Array.from(d.t), x: Float64Array.from(d.x), y: Float64Array.from(d.y), z: Float64Array.from(d.z) };
-  if (!Object.keys(flujos).length) throw new Error('el JSON no tiene datos de sensores');
-  const b = flujos.acc || flujos.lin || flujos.gyr || flujos.mag;
-  return { id: 'g' + Date.now().toString(36) + Math.floor(Math.random() * 1e5).toString(36), nombre: o.nombre || 'Importada', fecha: o.fecha || new Date().toISOString(), fuente: o.fuente || 'importada', frecuenciaPedida: o.frecuenciaPedida || null, duracion: b.t[b.t.length - 1] - b.t[0], notas: o.notas || '', cal: o.cal || null, flujos };
+/** JSON de Vibra (formato vibra-1) u objeto equivalente: se valida campo por campo (ver normGrab). */
+function desdeObjeto(o, cnt = contador()) {
+  if (!o || typeof o !== 'object' || Array.isArray(o)) throw new Error('el JSON no es una grabación de Vibra');
+  const g = normGrab(o, true, cnt);
+  if (!g) throw new Error('el archivo no tiene datos válidos de acelerómetro, aceleración lineal o giroscopio (al menos 3 muestras numéricas)');
+  return g;
 }
-/** CSV de Vibra (flujo,t,x,y,z) o de phyphox/otros (tiempo + 3 columnas por sensor, detectado por el encabezado). */
-function desdeCSV(texto, nombre) {
-  const lineas = texto.split(/\r?\n/).filter(l => l.trim() && !l.startsWith('#'));
+/** CSV de Vibra (flujo,t,x,y,z) o de phyphox/otros (tiempo + 3 columnas por sensor, detectado por el encabezado).
+ *  Los valores se leen como números (celda vacía o texto = muestra inválida, que se descarta y se cuenta). */
+function desdeCSV(texto0, nombre, cnt = contador()) {
+  const lineas = texto0.split(/\r?\n/).filter(l => l.trim() && !l.startsWith('#'));
+  if (lineas.length < 4) throw new Error('el CSV no tiene suficientes filas');
   const sep = [',', ';', '\t'].map(s => [s, lineas[0].split(s).length]).sort((a, b) => b[1] - a[1])[0][0];
-  const cab = lineas[0].split(sep).map(s => s.replace(/"/g, '').trim().toLowerCase()), filas = lineas.slice(1).map(l => l.split(sep).map(v => parseFloat(v.replace(/"/g, ''))));
+  // con separador «;» o tabulador se acepta la coma decimal (phyphox «punto y coma, coma decimal»)
+  const nv = v => { const t = v.replace(/"/g, '').trim(); return t === '' ? NaN : Number(sep === ',' ? t : t.replace(',', '.')); };
+  const cab = lineas[0].split(sep).slice(0, 200).map(s => s.replace(/"/g, '').trim().toLowerCase().slice(0, 100));
   const flujos = {};
   if (cab[0] === 'flujo') {
-    const L = {}; for (const l of lineas.slice(1)) { const p = l.split(sep); (L[p[0]] = L[p[0]] || []).push(p.slice(1).map(Number)); }
-    for (const [f, a] of Object.entries(L)) if (S.FLUJOS[f]) flujos[f] = { t: Float64Array.from(a, r => r[0]), x: Float64Array.from(a, r => r[1]), y: Float64Array.from(a, r => r[2]), z: Float64Array.from(a, r => r[3]) };
+    const L = {}; for (const l of lineas.slice(1)) { const p = l.split(sep), f = p[0].replace(/"/g, '').trim(); if (!tiene(S.FLUJOS, f)) { cnt.muestras++; continue; } (L[f] = L[f] || []).push(p.slice(1, 5).map(nv)); }
+    for (const [f, a] of Object.entries(L)) flujos[f] = { t: Float64Array.from(a, r => r[0]), x: Float64Array.from(a, r => r[1]), y: Float64Array.from(a, r => r[2]), z: Float64Array.from(a, r => r[3]) };
   } else {
     const it = cab.findIndex(c => c.startsWith('time') || c.startsWith('t_s') || c === 't' || c.startsWith('tiempo')); if (it < 0) throw new Error('no se encontró la columna de tiempo');
+    const filas = lineas.slice(1).map(l => l.split(sep).map(nv));
     const tipoDe = c => /gyr|rad\/s|rotation|giro/.test(c) ? 'gyr' : /magnet|^mag|µt|\but\b/.test(c) ? 'mag' : /linear|without|sin g|lin_/.test(c) ? 'lin' : /acc|m\/s\^2|m\/s²/.test(c) ? 'acc' : null;
     const grupos = {}; cab.forEach((c, j) => { if (j === it) return; const f = tipoDe(c), e = /(^|[\s_])x\b|_x$| x /.test(c) ? 'x' : /(^|[\s_])y\b|_y$| y /.test(c) ? 'y' : /(^|[\s_])z\b|_z$| z /.test(c) ? 'z' : null; if (f && e) (grupos[f] = grupos[f] || {})[e] = j; });
-    for (const [f, ej] of Object.entries(grupos)) if (ej.x !== undefined && ej.y !== undefined && ej.z !== undefined) {
-      const ok = filas.filter(r => isFinite(r[it]) && isFinite(r[ej.x])); flujos[f] = { t: Float64Array.from(ok, r => r[it]), x: Float64Array.from(ok, r => r[ej.x]), y: Float64Array.from(ok, r => r[ej.y]), z: Float64Array.from(ok, r => r[ej.z]) };
-    }
+    for (const [f, ej] of Object.entries(grupos)) if (ej.x !== undefined && ej.y !== undefined && ej.z !== undefined)
+      flujos[f] = { t: Float64Array.from(filas, r => r[it]), x: Float64Array.from(filas, r => r[ej.x]), y: Float64Array.from(filas, r => r[ej.y]), z: Float64Array.from(filas, r => r[ej.z]) };
   }
-  return desdeObjeto({ nombre: nombre.replace(/\.\w+$/, ''), fuente: 'importada', flujos });
+  return desdeObjeto({ nombre: String(nombre).replace(/\.\w+$/, ''), fuente: 'importada', flujos }, cnt);
 }
 async function importar(files) {
   for (const f of files) {
-    try { const txt = await f.text(); const g = f.name.toLowerCase().endsWith('.json') ? desdeObjeto(JSON.parse(txt)) : desdeCSV(txt, f.name); await agregarGrabacion(g, false); aviso(`Importada «${g.nombre}».`); }
-    catch (e) { aviso(`No se pudo importar ${f.name}: ${e.message}`); }
+    try {
+      if (f.size > LIM.archivoMB * 1e6) throw new Error(`pesa ${fmt(f.size / 1e6, 0)} MB (máximo ${LIM.archivoMB} MB)`);
+      const txt = await f.text(), cnt = contador();
+      let o = null; if (f.name.toLowerCase().endsWith('.json')) { try { o = JSON.parse(txt); } catch (e) { throw new Error('el JSON no se puede leer'); } }
+      const g = o ? desdeObjeto(o, cnt) : desdeCSV(txt, f.name, cnt);
+      await agregarGrabacion(g, false); const d = txtDescartes(cnt);
+      aviso(`Importada «${g.nombre}».` + (d ? ' ' + d : ''));
+    } catch (e) { aviso(`No se pudo importar ${f.name}: ${e.message}`); }
   }
   renderGrabaciones();
 }
@@ -603,7 +703,7 @@ function accionGrabacion(id, acc, item) {
   else if (acc === 'renombrar') {
     const nom = item.querySelector('.nom'); nom.innerHTML = `<input type="text" value="${esc(g.nombre || '')}" style="width:100%"> `;
     const inp = nom.querySelector('input'); inp.focus(); inp.select();
-    const fin = async () => { g.nombre = inp.value.trim() || g.nombre; try { await BD.guardar(g); } catch (e) { /* solo memoria */ } renderGrabaciones(); renderSelector(); };
+    const fin = async () => { g.nombre = texto(inp.value) || g.nombre; try { await BD.guardar(g); } catch (e) { /* solo memoria */ } renderGrabaciones(); renderSelector(); };
     inp.addEventListener('keydown', e => { if (e.key === 'Enter') fin(); if (e.key === 'Escape') renderGrabaciones(); }); inp.addEventListener('blur', fin);
   } else if (acc === 'borrar') {
     const ac = item.querySelector('.acciones');
@@ -675,12 +775,12 @@ function enlazar() {
 
 /* ============================================================ arranque */
 async function arrancar() {
-  E.cal = leerLS('vibra-cal', null); E.ref = leerLS('vibra-ref', null);
+  E.cal = normCal(leerLS('vibra-cal', null)); E.ref = normRef(leerLS('vibra-ref', null));
   crearGraficas(); enlazar();
   await cargarLista();
   // Parámetros de prueba: ?demo=tipo&dur=s&fs=Hz&tab=pestaña&vivo=1
   const demo = PARAM.get('demo');
-  if (demo && S.DEMOS[demo]) {
+  if (demo && tiene(S.DEMOS, demo)) {
     const g = S.grabacionSintetica(demo, +(PARAM.get('dur') || (demo === 'estructura' || demo === 'reposo' ? 600 : 40)), +(PARAM.get('fs') || 100), 7);
     await agregarGrabacion(g, false); seleccionar(g.id);
     if (PARAM.get('ref') === '1' && demo === 'maquina-falla') { const r = S.grabacionSintetica('maquina', 40, +(PARAM.get('fs') || 100), 3); E.lista.push(r); E.actual = r; cacheRem.clear(); renderMaquinas(); E.ref = Object.assign({ nombre: 'DEMO referencia', fecha: new Date().toISOString() }, E.maqActual); E.actual = g; cacheRem.clear(); }

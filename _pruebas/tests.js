@@ -1,25 +1,4 @@
-<!doctype html>
-<html lang="es">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="robots" content="noindex, nofollow">
-<title>Vibra — pruebas de dsp.js</title>
-<style>
-body{font:14px/1.45 system-ui,sans-serif;margin:16px;background:#fff;color:#111}
-table{border-collapse:collapse;width:100%}
-td,th{border:1px solid #ccc;padding:4px 6px;vertical-align:top;text-align:left}
-td.p{color:#0a6b2e;font-weight:700} td.f{color:#b00020;font-weight:700}
-code{font-size:12px}
-</style>
-</head>
-<body>
-<h1>Pruebas de dsp.js</h1>
-<p>Cada prueba genera señales sintéticas con respuesta conocida (semillas fijas, resultados reproducibles).</p>
-<p id="resumen">Ejecutando…</p>
-<table><thead><tr><th>#</th><th>Prueba</th><th>Resultado</th><th>Detalle numérico</th></tr></thead><tbody id="informe"></tbody></table>
-<script src="dsp.js"></script>
-<script>
+/* Pruebas de dsp.js (antes en línea en tests.html; separado para que la CSP no necesite scripts en línea). */
 'use strict';
 const D = DSP, filas = [];
 let npasa = 0, nfalla = 0;
@@ -234,6 +213,3 @@ prueba('Máquina sintética: detecta 1× = 14,8 Hz y amplitudes de velocidad de 
 
 document.getElementById('informe').innerHTML = filas.join('');
 document.getElementById('resumen').textContent = `RESUMEN: ${npasa} PASA, ${nfalla} FALLA`;
-</script>
-</body>
-</html>

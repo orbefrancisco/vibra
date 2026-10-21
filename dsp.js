@@ -9,7 +9,7 @@
  *   Amp   = 2·√⟨|X_k|²⟩ / S1          [u]       amplitud de pico de un seno centrado en el bin
  *   con S1 = Σw, S2 = Σw². Así Σ PSD·Δf = varianza (Parseval) y un seno A·cos da pico A en Amp.
  *
- * Se usa en el navegador (window.DSP) y en tests.html.
+ * Se usa en el navegador (window.DSP) y en _pruebas/tests.html (no publicada).
  */
 (function (raiz) {
 'use strict';
