@@ -1,0 +1,383 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Vibra</title>
+<meta name="description" content="Análisis fino de vibraciones con los sensores del teléfono">
+<meta name="robots" content="noindex, nofollow">
+<link rel="icon" href="icono.svg">
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icono-192.png">
+<meta name="theme-color" content="#11161a">
+<style>
+/* Vibra: instrumento de análisis de vibraciones. Variables de color con tema claro/oscuro según el sistema. */
+:root{
+  --bg:#f3f4f2; --surface:#ffffff; --soft:#eef0ef; --fg:#121619; --muted:#555d64; --line:#cfd5d8; --grid:#e7eaeb;
+  --acento:#1f66c4; --ok:#1b7f3b; --aviso:#9a5b00; --mal:#b3261e;
+  --s1:#2a78d6; --s2:#eb6834; --s3:#1baf7a; --s4:#6250d6; --s5:#e34948;
+  --mono:ui-monospace,"SFMono-Regular","Roboto Mono",Menlo,Consolas,monospace;
+  --body:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  color-scheme:light;
+}
+@media (prefers-color-scheme: dark){:root{
+  --bg:#0d1113; --surface:#151a1d; --soft:#1c2226; --fg:#e9edf0; --muted:#9ca6ae; --line:#2c353b; --grid:#20272b;
+  --acento:#5aa2f0; --ok:#4cc27a; --aviso:#e0a43a; --mal:#f2726a;
+  --s1:#3987e5; --s2:#d95926; --s3:#199e70; --s4:#9085e9; --s5:#e66767; color-scheme:dark}}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg)}
+[hidden]{display:none!important}
+body{color:var(--fg);font:15px/1.45 var(--body);-webkit-tap-highlight-color:transparent;padding-bottom:env(safe-area-inset-bottom,0px)}
+button,select,input{font:inherit;color:inherit}
+button{cursor:pointer}
+:focus-visible{outline:3px solid var(--acento);outline-offset:2px}
+header.top{position:sticky;top:0;z-index:5;background:var(--bg);border-bottom:1px solid var(--line);padding:calc(env(safe-area-inset-top,0px) + 8px) 12px 0}
+.fila-top{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;max-width:1180px;margin:0 auto}
+h1{font:800 20px/1 var(--body);letter-spacing:.14em;margin:0;text-transform:uppercase;display:flex;align-items:center;gap:8px}
+h1 svg{width:24px;height:24px}
+#estadoTop{font:12px/1.3 var(--mono);color:var(--muted);text-align:right}
+#estadoTop b{color:var(--fg);font-weight:600}
+nav.tabs{display:flex;gap:2px;overflow-x:auto;scrollbar-width:none;max-width:1180px;margin:6px auto 0}
+nav.tabs::-webkit-scrollbar{display:none}
+nav.tabs button{flex:0 0 auto;border:0;background:none;padding:9px 12px 8px;border-bottom:3px solid transparent;font-weight:600;font-size:14px;color:var(--muted)}
+nav.tabs button[aria-selected="true"]{color:var(--fg);border-bottom-color:var(--acento)}
+main{max-width:1180px;margin:0 auto;padding:12px 12px 80px}
+.panel{display:grid;grid-template-columns:1fr;gap:12px}
+@media (min-width:900px){.panel{grid-template-columns:1fr 1fr}.ancho{grid-column:1/-1}}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:12px;min-width:0}
+.card h2{font:700 13px/1.2 var(--body);letter-spacing:.08em;text-transform:uppercase;margin:0 0 10px;color:var(--muted);display:flex;justify-content:space-between;gap:8px;align-items:baseline;flex-wrap:wrap}
+.card h2 small{font:500 11px var(--mono);letter-spacing:0;text-transform:none}
+.controles{display:flex;flex-wrap:wrap;gap:8px 10px;align-items:flex-end;margin-bottom:8px}
+.controles label{display:flex;flex-direction:column;gap:2px;font-size:12px;color:var(--muted);min-width:0}
+.controles label.chk{flex-direction:row;align-items:center;gap:6px;font-size:13px;color:var(--fg);min-height:38px}
+select,input[type=text],input[type=number]{background:var(--soft);border:1px solid var(--line);border-radius:7px;padding:7px 8px;min-height:38px;max-width:100%}
+input[type=text].num{width:7.5em;font-family:var(--mono)}
+input[type=checkbox]{width:18px;height:18px;accent-color:var(--acento)}
+.btn{border:1px solid var(--line);background:var(--soft);border-radius:8px;padding:8px 14px;min-height:40px;font-weight:600;font-size:14px}
+.btn.prim{background:var(--acento);border-color:var(--acento);color:#fff}
+.btn.peligro{color:var(--mal);border-color:var(--mal)}
+.btn:disabled{opacity:.5;cursor:default}
+.btn.peq{padding:4px 10px;min-height:32px;font-size:13px}
+.grupo{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+canvas{display:block;width:100%}
+.nota{font-size:12.5px;color:var(--muted);margin:6px 0 0}
+.como{font-size:12.5px;color:var(--muted);margin:8px 0 0;border-left:3px solid var(--line);padding-left:8px}
+.como b{color:var(--fg);font-weight:600}
+.aviso{background:color-mix(in srgb,var(--aviso) 12%,var(--surface));border:1px solid color-mix(in srgb,var(--aviso) 45%,var(--line));border-radius:8px;padding:8px 10px;font-size:13px;margin:8px 0 0}
+.error{background:color-mix(in srgb,var(--mal) 10%,var(--surface));border:1px solid color-mix(in srgb,var(--mal) 45%,var(--line));border-radius:8px;padding:8px 10px;font-size:13px;margin:8px 0 0}
+.okc{color:var(--ok)}
+.mal{color:var(--mal)}
+.indic{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:8px}
+.indic div{background:var(--soft);border-radius:8px;padding:8px 10px;min-width:0}
+.indic span{display:block;font-size:12px;color:var(--muted)}
+.indic b{display:block;font:600 clamp(15px,3.9vw,20px)/1.25 var(--mono);overflow-wrap:anywhere}
+.indic i{font-style:normal;font:12px var(--mono);color:var(--muted)}
+.tabla{overflow-x:auto;margin-top:6px}
+table{border-collapse:collapse;width:100%;font-size:13px}
+th,td{padding:5px 8px;border-bottom:1px solid var(--grid);text-align:left;vertical-align:top}
+th{white-space:nowrap}
+th{font-size:12px;color:var(--muted);font-weight:600}
+td.n{font-family:var(--mono);text-align:right;white-space:nowrap}
+tr.marcada td{background:color-mix(in srgb,var(--acento) 14%,transparent)}
+.chip{display:inline-block;font:600 11px var(--mono);padding:2px 7px;border-radius:99px;background:var(--soft);border:1px solid var(--line)}
+.barraGrab{display:flex;flex-wrap:wrap;gap:8px;align-items:center;background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:8px 12px;margin-bottom:12px}
+.barraGrab select{flex:1 1 220px;min-width:0}
+.barraGrab .info{font:12px/1.4 var(--mono);color:var(--muted);flex:1 1 100%}
+.barraGrab .info b{color:var(--fg)}
+#cuenta{font:800 64px/1 var(--mono);text-align:center;padding:10px 0}
+.progreso{height:8px;background:var(--soft);border-radius:4px;overflow:hidden;margin-top:6px}
+.progreso div{height:100%;background:var(--acento);width:0}
+.lista-grab{display:flex;flex-direction:column;gap:8px}
+.item-grab{border:1px solid var(--line);border-radius:9px;padding:9px 10px;background:var(--surface)}
+.item-grab .tit{display:flex;gap:8px;align-items:center;font-weight:600;overflow-wrap:anywhere}
+.item-grab .meta{font:12px var(--mono);color:var(--muted);margin:3px 0 7px}
+.calgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(100px,1fr));gap:6px}
+.calgrid button{min-height:52px}
+.calgrid button.hecho{border-color:var(--ok);color:var(--ok)}
+details summary{cursor:pointer;color:var(--muted);font-size:13px}
+.leyendaColor{height:10px;border-radius:3px;background:linear-gradient(90deg,#440154,#414487,#2a788e,#22a884,#7ad151,#fde725)}
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="fila-top">
+    <h1><svg viewBox="0 0 128 128" aria-hidden="true"><use href="#logo"/></svg>Vibra</h1>
+    <div id="estadoTop">sensores detenidos</div>
+  </div>
+  <nav class="tabs" role="tablist">
+    <button role="tab" data-tab="medir" aria-selected="true">Medir</button>
+    <button role="tab" data-tab="analizar">Analizar</button>
+    <button role="tab" data-tab="maquinas">Máquinas</button>
+    <button role="tab" data-tab="estructuras">Estructuras</button>
+    <button role="tab" data-tab="sensor">Sensor</button>
+    <button role="tab" data-tab="grabaciones">Grabaciones</button>
+  </nav>
+</header>
+<svg width="0" height="0" style="position:absolute"><defs><symbol id="logo" viewBox="0 0 128 128"><rect width="128" height="128" rx="26" fill="#11161a"/><path d="M14 64h14l8-26 12 52 12-70 12 84 12-60 10 34 8-14h12" fill="none" stroke="#5aa2f0" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/></symbol></defs></svg>
+
+<main>
+<div class="barraGrab" id="barraGrab" hidden>
+  <select id="selGrab" aria-label="Grabación a analizar"></select>
+  <button class="btn peq" id="btnDemoRapida" title="Crear una grabación sintética para probar">+ DEMO</button>
+  <div class="info" id="infoGrab"></div>
+</div>
+
+<!-- ============================================================ MEDIR -->
+<section class="panel" id="tab-medir">
+  <div class="card">
+    <h2>Fuente de datos</h2>
+    <div class="controles">
+      <label>Fuente<select id="fuente">
+        <option value="auto">Automática (sensor genérico → DeviceMotion)</option>
+        <option value="generico">Generic Sensor API</option>
+        <option value="devicemotion">DeviceMotionEvent</option>
+        <option value="demo">DEMO (señal sintética)</option></select></label>
+      <label id="lblFreq">Frecuencia pedida (Hz)<input type="text" class="num" id="freqPedida" inputmode="decimal" value="500"></label>
+      <label id="lblDemo" hidden>Señal DEMO<select id="demoTipo"></select></label>
+      <label id="lblDemoFs" hidden>fs DEMO (Hz)<select id="demoFs"><option>50</option><option selected>100</option><option>200</option><option>400</option></select></label>
+      <label class="chk"><input type="checkbox" id="usarMag"> Magnetómetro</label>
+    </div>
+    <div class="grupo"><button class="btn prim" id="btnIniciar">Iniciar sensores</button><button class="btn" id="btnDetener" disabled>Detener</button></div>
+    <div id="msgFuente"></div>
+  </div>
+
+  <div class="card">
+    <h2>Muestreo real <small id="fuenteActual">—</small></h2>
+    <div class="indic">
+      <div><span>fs acelerómetro</span><b id="fsAcc">—</b><i>Hz medidos</i></div>
+      <div><span>Nyquist</span><b id="nyq">—</b><i>Hz = fs/2</i></div>
+      <div><span>fs giroscopio</span><b id="fsGyr">—</b><i>Hz medidos</i></div>
+      <div><span>Jitter σ(Δt)</span><b id="jit">—</b><i>ms</i></div>
+      <div><span>Huecos</span><b id="huecos">—</b><i>últimos 10 s</i></div>
+      <div><span>Pedida</span><b id="fsPed">—</b><i>Hz</i></div>
+    </div>
+    <p class="aviso"><b>Aliasing:</b> el teléfono no ve nada por encima de Nyquist. Una vibración más rápida no desaparece: aparece «doblada» en una frecuencia falsa por debajo de Nyquist. Chrome en Android suele entregar unos 60 Hz (Nyquist ≈ 30 Hz), aunque se pidan más.</p>
+  </div>
+
+  <div class="card ancho">
+    <h2>Aceleración en vivo <small><select id="vivoFlujo" aria-label="Flujo"><option value="lin">sin gravedad</option><option value="acc">con gravedad</option></select></small></h2>
+    <canvas id="gVivoAcc"></canvas>
+  </div>
+  <div class="card">
+    <h2>Giroscopio en vivo <small>rad/s</small></h2>
+    <canvas id="gVivoGyr"></canvas>
+  </div>
+  <div class="card">
+    <h2>Espectro en vivo <small><select id="vivoEje" aria-label="Eje"><option value="z">z</option><option value="x">x</option><option value="y">y</option><option value="mag">|a|</option></select> · últimos 10 s</small></h2>
+    <canvas id="gVivoEsp"></canvas>
+    <p class="nota" id="vivoPico"></p>
+  </div>
+
+  <div class="card">
+    <h2>Grabar</h2>
+    <div class="controles">
+      <label>Duración<select id="durGrab"><option value="5">5 s</option><option value="10" selected>10 s</option><option value="30">30 s</option><option value="60">1 min</option><option value="120">2 min</option><option value="300">5 min</option><option value="600">10 min</option><option value="1200">20 min</option><option value="0">manual</option></select></label>
+      <label>Cuenta regresiva<select id="cuentaGrab"><option value="0">no</option><option value="3" selected>3 s</option><option value="5">5 s</option><option value="10">10 s</option></select></label>
+      <label class="chk"><input type="checkbox" id="disparo"> Disparo por umbral</label>
+      <label>Umbral (m/s²)<input type="text" class="num" id="umbral" inputmode="decimal" value="0,5"></label>
+      <label>Pre-disparo (s)<input type="text" class="num" id="preDisparo" inputmode="decimal" value="1"></label>
+      <label>Nombre<input type="text" id="nombreGrab" placeholder="p. ej. resorte 200 g"></label>
+    </div>
+    <div class="grupo"><button class="btn prim" id="btnGrabar">Grabar</button><button class="btn" id="btnParar" disabled>Terminar</button></div>
+    <div id="estadoGrab" hidden><div id="cuenta"></div><p class="nota" id="txtGrab" style="text-align:center"></p><div class="progreso"><div id="barraProg"></div></div></div>
+    <p class="nota">Durante la grabación: no toque el teléfono ni la superficie. La pantalla se mantiene encendida (Wake Lock) si el navegador lo permite.</p>
+  </div>
+
+  <div class="card">
+    <h2>Grabación DEMO instantánea</h2>
+    <p class="nota" style="margin:0 0 8px">Para probar el análisis en una computadora o sin montar el experimento. Incluye jitter de muestreo y huecos realistas.</p>
+    <div class="controles">
+      <label>Señal<select id="demoInstTipo"></select></label>
+      <label>Duración<select id="demoInstDur"><option value="20">20 s</option><option value="60" selected>1 min</option><option value="300">5 min</option><option value="1200">20 min</option></select></label>
+      <label>fs (Hz)<select id="demoInstFs"><option>50</option><option>60</option><option selected>100</option><option>200</option><option>400</option></select></label>
+    </div>
+    <button class="btn" id="btnDemoInst">Generar y analizar</button>
+    <p class="nota" id="demoDesc"></p>
+  </div>
+</section>
+
+<!-- ============================================================ ANALIZAR -->
+<section class="panel" id="tab-analizar" hidden>
+  <div class="card ancho">
+    <h2>Señal <small id="infoSenal"></small></h2>
+    <div class="controles">
+      <label>Sensor<select id="aFlujo"></select></label>
+      <label>Eje<select id="aEje"><option value="x">x</option><option value="y">y</option><option value="z" selected>z</option><option value="mag">|v| (magnitud)</option></select></label>
+      <label class="chk"><input type="checkbox" id="aQuitarMedia" checked> Quitar media (gravedad)</label>
+      <label>Remuestreo<select id="aInterp"><option value="cubica">cúbica (Catmull-Rom)</option><option value="lineal">lineal</option></select></label>
+      <label>Filtro<select id="aFiltro"><option value="no">ninguno</option><option value="bajo">paso bajo</option><option value="alto">paso alto</option><option value="banda">paso banda</option></select></label>
+      <label id="lblF1" hidden>f₁ (Hz)<input type="text" class="num" id="aF1" inputmode="decimal" value="0,5"></label>
+      <label id="lblF2" hidden>f₂ (Hz)<input type="text" class="num" id="aF2" inputmode="decimal" value="10"></label>
+      <label id="lblOrden" hidden>Orden<select id="aOrden"><option>2</option><option selected>4</option><option>6</option><option>8</option></select></label>
+    </div>
+    <canvas id="gSerie"></canvas>
+    <div class="grupo" style="margin-top:6px"><button class="btn peq" id="btnTodo">Usar todo</button><button class="btn peq" id="btnZoom">Ampliar selección</button><button class="btn peq" id="btnDecae">Detectar decaimiento</button><span class="nota" id="txtSel" style="margin:0"></span></div>
+    <p class="nota">Arrastre sobre la gráfica para elegir un tramo; toque para leer valores. El tramo se usa en estadísticos, espectro, ajuste y péndulo.</p>
+    <p class="como" id="comoFiltro"></p>
+  </div>
+  <div class="card">
+    <h2>Estadísticos del tramo</h2>
+    <div class="indic" id="estad"></div>
+    <p class="como"><b>Cómo se calcula:</b> RMS = desviación estándar (sin media); pico = máx |x − media|; factor de cresta = pico/RMS (√2 para un seno, ≈ 3–4 para ruido gaussiano); curtosis = ⟨(x−μ)⁴⟩/σ⁴ (1,5 seno; 3 gaussiana; &gt; 3 indica impactos).</p>
+  </div>
+  <div class="card">
+    <h2>Espectrograma <small id="infoSg"></small></h2>
+    <div class="controles"><label>Segmento<select id="sgSeg"><option>64</option><option>128</option><option selected>256</option><option>512</option><option>1024</option></select></label><label>Rango (dB)<select id="sgRango"><option>40</option><option selected>60</option><option>80</option></select></label></div>
+    <canvas id="gSg"></canvas>
+    <div class="leyendaColor"></div><p class="nota" id="sgLeyenda"></p>
+  </div>
+  <div class="card ancho">
+    <h2>Espectro <small id="infoEsp"></small></h2>
+    <div class="controles">
+      <label>Magnitud<select id="eMag"><option value="0">aceleración</option><option value="1">velocidad (mm/s)</option><option value="2">desplazamiento (µm)</option></select></label>
+      <label>Tipo<select id="eTipo"><option value="psd">densidad (PSD)</option><option value="amp">amplitud</option></select></label>
+      <label>Escala<select id="eEscala"><option value="log" selected>log</option><option value="db">dB</option><option value="lin">lineal</option></select></label>
+      <label>Ventana<select id="eVent"><option value="hann">Hann</option><option value="hamming">Hamming</option><option value="blackmanharris">Blackman-Harris</option><option value="flattop">Flat-top</option><option value="rect">Rectangular</option></select></label>
+      <label>Segmento<select id="eSeg"><option value="auto">auto</option><option>256</option><option>512</option><option>1024</option><option>2048</option><option>4096</option><option>8192</option><option>16384</option></select></label>
+      <label>Paso alto integr. (Hz)<input type="text" class="num" id="eFhp" inputmode="decimal" value="1"></label>
+      <label>Interpolación<select id="eInterp"><option value="gauss">Gaussiana</option><option value="parabola">parabólica</option></select></label>
+    </div>
+    <canvas id="gEsp"></canvas>
+    <div class="tabla" id="tPicos"></div>
+    <p class="como" id="comoEsp"></p>
+  </div>
+  <div class="card ancho">
+    <h2>Oscilador amortiguado <small>x(t) = A·e^(−t/τ)·cos(2πf t + φ) + c</small></h2>
+    <div class="grupo"><button class="btn prim" id="btnAjuste">Ajustar el tramo seleccionado</button></div>
+    <div id="resAjuste"></div>
+    <canvas id="gAjuste" hidden></canvas>
+    <canvas id="gResid" hidden></canvas>
+    <p class="como"><b>Cómo se calcula:</b> Levenberg–Marquardt propio sobre la señal remuestreada. Valores iniciales: f por FFT con relleno ×8 y afinado de la DTFT; τ por regresión ponderada de ln(envolvente de Hilbert); A, φ, c por mínimos cuadrados lineales. Incertidumbres: covarianza σ²(JᵀJ)⁻¹ con σ² = χ²/(N−5), inflada por (1+ρ₁)/(1−ρ₁) si los residuos están correlacionados. χ²/ν compara los residuos con el ruido estimado por diferencias primeras (≈ 1 si el modelo describe bien la señal). f₀ = √(f² + (1/2πτ)²), ζ = 1/(ω₀τ), Q = 1/(2ζ).</p>
+  </div>
+  <div class="card ancho">
+    <h2>Péndulo <small>con giroscopio</small></h2>
+    <div class="controles">
+      <label>Largo L (m)<input type="text" class="num" id="pL" inputmode="decimal" value="0,75"></label>
+      <label>Eje de giro<select id="pEje"><option value="auto">automático</option><option value="x">x</option><option value="y">y</option><option value="z">z</option></select></label>
+      <button class="btn prim" id="btnPendulo">Analizar péndulo</button>
+    </div>
+    <div id="resPendulo"></div>
+    <canvas id="gPendulo" hidden></canvas>
+    <p class="como"><b>Cómo se calcula:</b> por ciclo (entre cruces ascendentes de ω) se mide el periodo T y la amplitud de ω. Como ω_máx = 2√(g/L)·k y T = 4√(L/g)·K(k), con k = sin(θ₀/2), el producto ω_máx·T = 8k·K(k) da k sin conocer g ni integrar (inmune al sesgo del giroscopio). Luego g = 16·L·K(k)²/T², con K(k) = π/(2·AGM(1, √(1−k²))) exacta. Se compara con g de ángulo pequeño (4π²L/T²) y con θ₀ obtenido integrando ω. L es la distancia del eje al centro de masa (péndulo simple); para un péndulo físico use el largo equivalente I/(m·d).</p>
+  </div>
+</section>
+
+<!-- ============================================================ MÁQUINAS -->
+<section class="panel" id="tab-maquinas" hidden>
+  <div class="card ancho">
+    <h2>Máquina</h2>
+    <div class="controles">
+      <label>Eje<select id="mEje"><option value="auto">el de mayor vibración</option><option value="x">x</option><option value="y">y</option><option value="z">z</option><option value="mag">|a| dinámica</option></select></label>
+      <label>Velocidad (rpm, opcional)<input type="text" class="num" id="mRpm" inputmode="decimal" placeholder="auto"></label>
+      <label>Banda desde (Hz)<input type="text" class="num" id="mFmin" inputmode="decimal" value="10"></label>
+      <label>Clase (ISO 20816-3)<select id="mClase"></select></label>
+    </div>
+    <div class="indic" id="mGlobal"></div>
+    <div id="mAvisos"></div>
+    <p class="como" id="comoMaq"></p>
+  </div>
+  <div class="card ancho">
+    <h2>Espectro de velocidad <small>mm/s RMS por línea</small></h2>
+    <canvas id="gMaq"></canvas>
+    <div class="tabla" id="tArm"></div>
+  </div>
+  <div class="card">
+    <h2>Diagnóstico orientativo</h2>
+    <div id="mDiag"></div>
+    <p class="nota">Orientativo: las reglas clásicas (1× desbalance, 2× desalineación, muchos armónicos holgura) no sustituyen un análisis con acelerómetro industrial, fase y varias direcciones de medida.</p>
+  </div>
+  <div class="card">
+    <h2>Referencia y cambios</h2>
+    <div class="grupo"><button class="btn" id="btnGuardarRef">Guardar esta medición como referencia</button><button class="btn peq peligro" id="btnBorrarRef">Quitar referencia</button></div>
+    <p class="nota" id="txtRef"></p>
+    <canvas id="gRef" hidden></canvas>
+    <div class="tabla" id="tRef"></div>
+    <p class="como"><b>Cómo se calcula:</b> se guarda la PSD de velocidad; se compara nivel por bandas logarítmicas (10·log₁₀ de la energía en cada banda). +6 dB = el doble de amplitud: se marca como cambio notable.</p>
+  </div>
+</section>
+
+<!-- ============================================================ ESTRUCTURAS -->
+<section class="panel" id="tab-estructuras" hidden>
+  <div class="card ancho">
+    <h2>Modos de la estructura</h2>
+    <p class="aviso" style="margin-top:0">Apoye el teléfono firme sobre la losa o pasarela (sin funda blanda, pantalla arriba), cerca del centro del vano, y registre varios minutos sin tocarlo. Para modos de 1–10 Hz conviene ≥ 5 min.</p>
+    <div class="grupo" style="margin:8px 0"><button class="btn" data-grabar="120">Grabar 2 min</button><button class="btn" data-grabar="300">Grabar 5 min</button><button class="btn" data-grabar="600">Grabar 10 min</button></div>
+    <div class="controles">
+      <label>Resolución Δf<select id="sDf"><option value="0.01">0,01 Hz</option><option value="0.02">0,02 Hz</option><option value="0.05" selected>0,05 Hz</option><option value="0.1">0,1 Hz</option><option value="0.2">0,2 Hz</option></select></label>
+      <label>f máx. gráfica (Hz)<input type="text" class="num" id="sFmax" inputmode="decimal" value="20"></label>
+      <label>Sensor<select id="sFlujo"><option value="lin">aceleración sin gravedad</option><option value="acc">aceleración con gravedad</option></select></label>
+    </div>
+    <canvas id="gEst"></canvas>
+    <div class="tabla" id="tModos"></div>
+    <p class="como" id="comoEst"></p>
+  </div>
+  <div class="card">
+    <h2>Coherencia entre ejes</h2>
+    <div class="controles"><label>Par<select id="sPar"><option value="x-y">x – y</option><option value="x-z">x – z</option><option value="y-z">y – z</option></select></label></div>
+    <canvas id="gCoh"></canvas>
+    <p class="como"><b>Cómo se calcula:</b> γ²(f) = |Pxy|²/(Pxx·Pyy) por Welch. Cerca de 1: los dos ejes ven el mismo movimiento (un modo); cerca de 0: ruido independiente. Con K promedios, el nivel de fondo esperado es ≈ 1/K.</p>
+  </div>
+  <div class="card">
+    <h2>Confort humano · ISO 2631-1</h2>
+    <div class="controles"><label>Eje vertical<select id="sVert"><option value="z">z (teléfono acostado)</option><option value="y">y (teléfono de pie)</option><option value="x">x</option></select></label></div>
+    <div class="tabla" id="tConfort"></div>
+    <div class="tabla" id="tTablaConfort"></div>
+    <p class="como"><b>Cómo se calcula:</b> ponderaciones de frecuencia de ISO 2631-1 (Wk vertical, Wd horizontal) con sus funciones de transferencia analíticas (limitación de banda 0,4–100 Hz, transición aceleración–velocidad y escalón ascendente), aplicadas en el dominio de la frecuencia. a_w = RMS ponderado; VDV = (∫a_w⁴dt)^¼; MTVV = máximo del RMS móvil de 1 s; a_v = √(a_wx² + a_wy² + a_wz²). Umbral de percepción: ≈ 0,015 m/s² de pico ponderado (Wk) para la mitad de las personas atentas. Banda útil limitada por Nyquist.</p>
+  </div>
+</section>
+
+<!-- ============================================================ SENSOR -->
+<section class="panel" id="tab-sensor" hidden>
+  <div class="card ancho">
+    <h2>Ruido en reposo <small>use una grabación con el teléfono quieto</small></h2>
+    <div class="tabla" id="tRuido"></div>
+    <p class="como"><b>Cómo se calcula:</b> sesgo = media por eje; densidad de ruido = √(mediana de la PSD de Welch entre 1 Hz y 0,8·Nyquist). 1 µg = 9,80665·10⁻⁶ m/s²; (°/h)/√Hz = (rad/s)/√Hz · (180/π)·3600.</p>
+  </div>
+  <div class="card ancho">
+    <h2>Desviación de Allan <small><select id="alFlujo" aria-label="Sensor"><option value="gyr">giroscopio</option><option value="acc">acelerómetro</option></select></small></h2>
+    <canvas id="gAllan"></canvas>
+    <div class="tabla" id="tAllan"></div>
+    <p class="como"><b>Cómo se calcula:</b> varianza de Allan solapada, σ²(τ) = ⟨(θ_{k+2m} − 2θ_{k+m} + θ_k)²⟩/(2τ²) con θ la integral de la señal. Pendiente −½: ruido blanco (paseo aleatorio angular ARW o de velocidad VRW), leído en τ = 1 s; mínimo: inestabilidad de sesgo B = σ_mín/0,664; pendiente +½: paseo aleatorio de la tasa K, leído en τ = 3 s. Para ruido blanco, σ(1 s) = densidad/√2.</p>
+  </div>
+  <div class="card">
+    <h2>Jitter de muestreo</h2>
+    <canvas id="gJitter"></canvas>
+    <p class="nota" id="txtJitter"></p>
+  </div>
+  <div class="card">
+    <h2>Calibración del acelerómetro · 6 posiciones</h2>
+    <p class="nota" style="margin-top:0">Con los sensores en marcha, apoye el teléfono con cada eje hacia arriba y hacia abajo (sobre una mesa nivelada) y pulse el botón correspondiente: se promedian 3 s.</p>
+    <div class="controles"><label>g local (m/s²)<input type="text" class="num" id="gLocal" inputmode="decimal" value="9,78"></label></div>
+    <div class="calgrid" id="calBotones"></div>
+    <div id="resCal"></div>
+    <div class="grupo" style="margin-top:8px"><button class="btn prim" id="btnAplicarCal" disabled>Aplicar a las mediciones siguientes</button><button class="btn" id="btnSesgoGyr">Medir sesgo del giroscopio (10 s)</button><button class="btn peligro" id="btnBorrarCal">Borrar calibración</button></div>
+    <p class="nota" id="txtCal"></p>
+  </div>
+</section>
+
+<!-- ============================================================ GRABACIONES -->
+<section class="panel" id="tab-grabaciones" hidden>
+  <div class="card ancho">
+    <h2>Grabaciones <small id="txtAlmac"></small></h2>
+    <div class="grupo" style="margin-bottom:8px">
+      <label class="btn">Importar JSON / CSV<input type="file" id="archivo" accept=".json,.csv,.txt,application/json,text/csv" hidden multiple></label>
+      <button class="btn" id="btnComparar" disabled>Comparar las 2 marcadas</button>
+    </div>
+    <div class="lista-grab" id="listaGrab"></div>
+    <p class="nota">Todo se guarda solo en este teléfono (IndexedDB del navegador). CSV crudo = marcas de tiempo originales; CSV remuestreado = malla uniforme común a todos los sensores. Se importan los CSV de Vibra y los de phyphox (tiempo + 3 ejes).</p>
+  </div>
+  <div class="card ancho" id="cardComp" hidden>
+    <h2>Comparación <small id="txtComp"></small></h2>
+    <div class="controles"><label>Sensor<select id="cFlujo"><option value="lin">aceleración sin gravedad</option><option value="acc">aceleración con gravedad</option><option value="gyr">giroscopio</option></select></label><label>Eje<select id="cEje"><option value="x">x</option><option value="y">y</option><option value="z" selected>z</option><option value="mag">|v|</option></select></label></div>
+    <canvas id="gComp"></canvas>
+    <div class="tabla" id="tComp"></div>
+  </div>
+</section>
+</main>
+
+<script src="dsp.js"></script>
+<script src="sensores.js"></script>
+<script src="grafica.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

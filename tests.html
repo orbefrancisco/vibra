@@ -116,6 +116,17 @@ prueba('Decremento logarítmico y media potencia coinciden con la ζ verdadera (
   return { pasa: Math.abs(e1) < 0.01 && Math.abs(e2) < 0.05, detalle: `ζ verdadera ${fx(zeta, 5)}; decremento log ${fx(dl.zeta, 5)} (${fx(100 * e1, 2)} %); media potencia ${fx(mp.zeta, 5)} (${fx(100 * e2, 2)} %, tolerancia 5 %)` };
 });
 
+prueba('Decremento logarítmico con ruido (σ = 1 % de A, 30 realizaciones): sesgo medio de ζ < 2 % y σ_ζ calibrada', () => {
+  const r = D.rng(12), fs = 100, N = 1100, f = 1.85, tau = 3.5, zeta = 1 / (tau * Math.hypot(2 * Math.PI * f, 1 / tau)), zs = [], z = [];
+  for (let k = 0; k < 30; k++) {
+    const t = new Float64Array(N), y = new Float64Array(N), ph = 6.283 * r();
+    for (let i = 0; i < N; i++) { t[i] = i / fs; y[i] = 3 * Math.exp(-t[i] / tau) * Math.cos(2 * Math.PI * f * t[i] + ph) + 0.03 * D.normal(r); }
+    const dl = D.decrementoLog(t, y, 0, f, 10 * 0.03); zs.push(dl.zeta); z.push((dl.zeta - zeta) / dl.szeta);
+  }
+  const sesgo = D.media(zs) / zeta - 1, sdz = D.desv(z);
+  return { pasa: Math.abs(sesgo) < 0.02 && sdz > 0.6 && sdz < 1.6, detalle: `ζ verdadera ${fx(zeta, 5)}; media estimada ${fx(D.media(zs), 5)} (sesgo ${fx(100 * sesgo, 2)} %); dispersión de (ζ̂−ζ)/σ_ζ = ${fx(sdz, 2)} (ideal 1)` };
+});
+
 prueba('Desviación de Allan: ruido blanco pendiente −½ ± 0,05 y paseo aleatorio +½ ± 0,05; N = PSD/√2', () => {
   const r = D.rng(6), fs = 100, N = 1 << 18, s = 0.02, w = new Float64Array(N), rw = new Float64Array(N);
   let acc = 0; for (let i = 0; i < N; i++) { w[i] = s * D.normal(r); acc += 1e-4 * D.normal(r); rw[i] = acc; }

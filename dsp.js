@@ -499,20 +499,27 @@ D.ajustarAmortiguado = function (t, y, op = {}) {
     rho1: rho, factorCorr: fc, resid: res.r, iter: res.iter, convergio: res.convergio, ini, N, t0, modelo };
 };
 
-/** Decremento logarítmico: picos positivos sucesivos de (y − c) (interpolados por parábola), recta de
- *  ln(pico) contra número de ciclo → δ por ciclo; ζ = δ/√(4π² + δ²). umbral: altura mínima de pico. */
+/** Decremento logarítmico: picos positivos sucesivos de (y − c), cada uno con una parábola ajustada por mínimos
+ *  cuadrados a ±1/12 de periodo (promedia el ruido: el máximo de muestras ruidosas sesgaría hacia arriba los picos
+ *  pequeños). Recta ponderada (pesos ∝ pico²) de ln(pico) contra número de ciclo → δ por ciclo; ζ = δ/√(4π² + δ²).
+ *  umbral: altura mínima de pico (p. ej. 10σ del ruido). */
 D.decrementoLog = function (t, y, c, f, umbral = 0) {
-  const N = y.length, dtm = (t[N - 1] - t[0]) / (N - 1), sep = Math.max(2, Math.round(0.6 / (f * dtm))), picos = [];
-  for (let i = 1; i < N - 1; i++) {
+  const N = y.length, dtm = (t[N - 1] - t[0]) / (N - 1), sep = Math.max(2, Math.round(0.6 / (f * dtm))), h = Math.max(1, Math.round(1 / (12 * f * dtm))), picos = [];
+  for (let i = h; i < N - h; i++) {
     const v = y[i] - c; if (v <= umbral || !(y[i] > y[i - 1] && y[i] >= y[i + 1])) continue;
     let esMax = true; for (let j = Math.max(0, i - sep); j <= Math.min(N - 1, i + sep); j++) if (y[j] > y[i]) { esMax = false; break; }
     if (!esMax) continue;
-    const a = y[i - 1] - c, b = v, cc = y[i + 1] - c, den = a - 2 * b + cc, d = den ? 0.5 * (a - cc) / den : 0;
-    picos.push({ t: t[i] + d * dtm, y: b - 0.25 * (a - cc) * d });
+    // parábola v = a0 + a1·u + a2·u² por mínimos cuadrados en u = −h..h
+    let S0 = 0, S2 = 0, S4 = 0, T0 = 0, T1 = 0, T2 = 0;
+    for (let u = -h; u <= h; u++) { const w = y[i + u] - c; S0++; S2 += u * u; S4 += u ** 4; T0 += w; T1 += u * w; T2 += u * u * w; }
+    const a1 = T1 / S2, det = S0 * S4 - S2 * S2, a2 = (S0 * T2 - S2 * T0) / det, a0 = (S4 * T0 - S2 * T2) / det;
+    if (!(a2 < 0)) continue;
+    const um = Math.max(-h, Math.min(h, -a1 / (2 * a2)));
+    picos.push({ t: t[i] + um * dtm, y: a0 + a1 * um + a2 * um * um });
   }
   if (picos.length < 3) return null;
-  const k = picos.map(p => Math.round((p.t - picos[0].t) * f)), ly = picos.map(p => Math.log(p.y));
-  const r = D.ajusteLineal(k, ly); const delta = -r.b, sdelta = r.sb;
+  const k = picos.map(p => Math.round((p.t - picos[0].t) * f)), ly = picos.map(p => Math.log(p.y)), w = picos.map(p => p.y * p.y);
+  const r = D.ajusteLineal(k, ly, w); const delta = -r.b, sdelta = r.sb;
   const den = Math.sqrt(4 * Math.PI ** 2 + delta * delta), zeta = delta / den, szeta = sdelta * 4 * Math.PI ** 2 / den ** 3;
   return { delta, sdelta, zeta, szeta, Q: 1 / (2 * zeta), tau: 1 / (delta * f), npicos: picos.length, picos };
 };
@@ -752,7 +759,8 @@ D.zona20816 = (v, clase) => { const l = D.ZONAS_20816[clase].lim; return v < l[0
 
 /** Fundamental y armónicos de una máquina. esp: Welch de aceleración. Si se da f1 (rpm/60) se afina cerca;
  *  si no, se toma el pico de velocidad más alto (> fmin) y se prueba si f/2 o f/3 explican mejor la familia.
- *  Amplitudes en aceleración y velocidad (RMS = pico/√2) por armónico k·f1, con afinado DTFT. */
+ *  Amplitudes en aceleración y velocidad (RMS = pico/√2) por armónico k·f1, con afinado DTFT.
+ *  σ(f₁) = máx(σ de tono, dispersión entre cuartos del registro / 2). */
 D.armonicos = function (x, fs, esp, op = {}) {
   const fmin = op.fmin ?? 2, ny = fs / 2, vel = D.integrarEspectro(esp, 1, fmin), df = esp.df;
   const ampEn = (f, ancho = 1.5 * df) => { let best = 0; for (let i = 0; i < esp.f.length; i++) if (Math.abs(esp.f[i] - f) <= ancho && esp.amp[i] > best) best = esp.amp[i]; return best; };
@@ -771,12 +779,16 @@ D.armonicos = function (x, fs, esp, op = {}) {
   }
   const pisoPSD = D.pisoLocal(esp.psd, Math.round(f1 / df), 30, 4);
   const af = D.afinarTono(x, fs, f1, { ancho: 1.5 * df, ruidoPSD: pisoPSD }); f1 = af.f;
+  // estabilidad de la velocidad: f₁ en cada cuarto del registro (la σ de tono no ve fluctuaciones de velocidad)
+  const q = Math.floor(x.length / 4), fq = [];
+  if (q > 64) for (let k = 0; k < 4; k++) fq.push(D.afinarTono(x.subarray ? x.subarray(k * q, (k + 1) * q) : x.slice(k * q, (k + 1) * q), fs, f1, { ancho: 4 * fs / q }).f);
+  const dispersion = fq.length ? D.desv(fq) : NaN, sf1 = Math.max(af.sf || 0, isFinite(dispersion) ? dispersion / 2 : 0);
   const lista = []; const kmax = Math.min(op.nmax || 10, Math.floor(0.98 * ny / f1));
   for (let k = 1; k <= kmax; k++) {
     const fk = k * f1, aa = k === 1 ? af.A : D.afinarTono(x, fs, fk, { ancho: Math.min(1.5 * df, 0.2 * f1) }).A;
     lista.push({ k, f: fk, ampAcc: aa, velRMS: aa / (PI2 * fk) / Math.SQRT2 });
   }
-  return { f1, sf1: af.sf, rpm: 60 * f1, fuente, lista, kmax, nyquist: ny, piso: pisoPSD };
+  return { f1, sf1, sf1Tono: af.sf, dispersion, rpm: 60 * f1, fuente, lista, kmax, nyquist: ny, piso: pisoPSD };
 };
 /** Diagnóstico orientativo (reglas clásicas, lenguaje prudente) a partir de la lista de armónicos. */
 D.diagnosticoMaquina = function (arm) {
@@ -804,14 +816,17 @@ D.bandasLog = function (esp, fmin, fmax, nb) {
 /* ===================================================================== estructuras */
 /** Modos de una PSD promediada: picos de la PSD, ancho de media potencia (ζ) y una incertidumbre aproximada
  *  de la frecuencia de un modo con excitación aleatoria: σ_f ≈ √(ζ·f/(π·T)) (T = duración), o la del afinado de tono
- *  si el pico es más angosto que la resolución. */
+ *  si el pico es más angosto que la resolución (cota superior con ζ ≤ ancho de resolución). */
 D.modos = function (x, fs, esp, op = {}) {
   const T = x.length / fs, picos = D.buscarPicos(esp.f, esp.psd, { n: op.n || 6, fmin: op.fmin ?? 0.3, fmax: op.fmax, promDb: op.promDb ?? 6, potencia: true, sepBins: 4 });
   return picos.map(p => {
     const hp = D.medioPotencia(esp.f, esp.psd, p.i), limitado = !hp || hp.ancho < 2 * esp.enbw;
     let sf;
     if (hp && !limitado) sf = Math.sqrt(hp.zeta * p.f / (Math.PI * T));
-    else sf = D.afinarTono(x, fs, p.f, { ancho: esp.df, ruidoPSD: p.piso }).sf;
+    else { // pico no resuelto: cota con ζ ≤ (ancho medido o 2·ENBW)/(2f); se toma la mayor entre ésta y la de tono
+      const zub = Math.max(hp ? hp.ancho : 0, 2 * esp.enbw) / (2 * p.f);
+      sf = Math.max(Math.sqrt(zub * p.f / (Math.PI * T)), D.afinarTono(x, fs, p.f, { ancho: esp.df, ruidoPSD: p.piso }).sf || 0);
+    }
     return { f: p.f, sf, psd: p.y, promDb: p.promDb, zeta: hp && !limitado ? hp.zeta : NaN, ancho: hp ? hp.ancho : NaN, limitado };
   }).sort((a, b) => a.f - b.f);
 };
